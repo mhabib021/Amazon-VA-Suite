@@ -1,24 +1,107 @@
 import io
+import json
+import os
 import re
 import time
 import uuid
 import pandas as pd
 import streamlit as st
 
-# 1. Page Configuration & Hardening Header
+# =========================================================================
+# 1. PAGE CONFIGURATION & PREMIUM MODERN SAAS STYLING
+# =========================================================================
 st.set_page_config(
     page_title="NexusAmz | Ultimate Amazon VA & Merchant Suite",
     page_icon="🛡️",
     layout="wide",
 )
 
-# Initialize Session State Security Database
-if "admin_password" not in st.session_state:
-  st.session_state["admin_password"] = "Muhammad&021"
+st.markdown(
+    """
+    <style>
+    .stApp {
+        background-color: #f8fafc;
+        color: #0f172a;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
+        color: #ffffff;
+        border-right: 1px solid #e2e8f0;
+    }
+    [data-testid="stSidebar"] .stMarkdown, [data-testid="stSidebar"] label, [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
+        color: #ffffff !important;
+    }
+    .stTextInput input, .stSelectbox select, .stNumberInput input, .stTextArea textarea {
+        background-color: #ffffff !important;
+        color: #0f172a !important;
+        border: 1px solid #cbd5e1 !important;
+        border-radius: 8px !important;
+        padding: 0.5rem !important;
+    }
+    [data-testid="metric-container"] {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-left: 4px solid #0284c7;
+        padding: 16px;
+        border-radius: 12px;
+        color: #0f172a;
+    }
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        background-color: #ffffff;
+        padding: 10px;
+        border-radius: 12px;
+        border: 1px solid #e2e8f0;
+    }
+    .stTabs [data-baseweb="tab"] {
+        height: 48px;
+        background-color: #f1f5f9;
+        border-radius: 8px;
+        font-weight: 600;
+        color: #334155;
+        border: 1px solid #e2e8f0;
+        padding: 0 16px;
+    }
+    .stTabs [aria-selected="true"] {
+        background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%) !important;
+        color: white !important;
+        border: none !important;
+    }
+    .stButton>button {
+        background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
+        color: white;
+        font-weight: 600;
+        border-radius: 8px;
+        border: none;
+        padding: 0.6rem 1.2rem;
+    }
+    h1, h2, h3 {
+        color: #0f172a;
+        font-weight: 800;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-# Store structure with advanced security metadata
-if "token_database" not in st.session_state:
-  st.session_state["token_database"] = {
+TOKEN_FILE = "tokens.json"
+
+
+# =========================================================================
+# FILE PERSISTENCE HELPERS
+# =========================================================================
+def load_token_database():
+  if os.path.exists(TOKEN_FILE):
+    try:
+      with open(TOKEN_FILE, "r") as f:
+        data = json.load(f)
+        if isinstance(data, dict) and len(data) > 0:
+          return data
+    except Exception:
+      pass
+
+  default_db = {
       "VIP-CLIENT-01": {
           "max_attempts": 20,
           "remaining": 20,
@@ -26,27 +109,60 @@ if "token_database" not in st.session_state:
           "status": "Active",
       },
       "TEST-TOKEN-99": {
-          "max_attempts": 5,
-          "remaining": 5,
+          "max_attempts": 100,
+          "remaining": 100,
           "active_session": None,
           "status": "Active",
       },
   }
+  save_token_database(default_db)
+  return default_db
+
+
+def save_token_database(db):
+  try:
+    with open(TOKEN_FILE, "w") as f:
+      json.dump(db, f, indent=4)
+      f.flush()
+      os.fsync(f.fileno())
+  except Exception as e:
+    st.error(f"Error saving tokens to disk: {e}")
+
+
+def get_current_attempts():
+  db = load_token_database()
+  token = st.session_state.get("logged_in_token")
+  if token and token in db:
+    return db[token]["remaining"]
+  return 0
+
+
+# =========================================================================
+# SESSION STATE INITIALIZATION
+# =========================================================================
+if "admin_password" not in st.session_state:
+  st.session_state["admin_password"] = "Muhammad&021"
+
+if "admin_logged_in" not in st.session_state:
+  st.session_state["admin_logged_in"] = False
 
 if "logged_in_token" not in st.session_state:
   st.session_state["logged_in_token"] = None
 
-# Unique Cryptographic Fingerprint for this Browser Tab/Session
+if "token_charged_this_session" not in st.session_state:
+  st.session_state["token_charged_this_session"] = False
+
 if "my_session_id" not in st.session_state:
   st.session_state["my_session_id"] = str(uuid.uuid4())
 
-# Anti-Brute Force Protection State
 if "failed_login_attempts" not in st.session_state:
   st.session_state["failed_login_attempts"] = 0
 if "lockout_until" not in st.session_state:
   st.session_state["lockout_until"] = 0
 
-# 2. Left Sidebar: Secure Authentication & Device Binding
+# =========================================================================
+# 2. LEFT SIDEBAR: AUTHENTICATION & LOGIN-TIME CREDIT DEDUCTION
+# =========================================================================
 with st.sidebar:
   st.image("https://img.icons8.com/color/96/amazon.png", width=60)
   st.title("NexusAmz Suite")
@@ -57,8 +173,8 @@ with st.sidebar:
   st.divider()
 
   st.header("🛡️ Secure Access Control")
+  db = load_token_database()
 
-  # Check active lockout timer against brute-force attempts
   current_time = time.time()
   if current_time < st.session_state["lockout_until"]:
     remaining_lockout = int(st.session_state["lockout_until"] - current_time)
@@ -67,15 +183,13 @@ with st.sidebar:
         f" {remaining_lockout}s."
     )
   else:
-    # Validate session locking binding
     logged_token = st.session_state["logged_in_token"]
-    db = st.session_state["token_database"]
 
     if logged_token and logged_token in db:
       current_active_session = db[logged_token].get("active_session")
-      # Terminate session if another device hijacked the token
       if current_active_session != st.session_state["my_session_id"]:
         st.session_state["logged_in_token"] = None
+        st.session_state["token_charged_this_session"] = False
         st.warning(
             "⚠️ Security Alert: Token logged in from another device/browser."
         )
@@ -83,15 +197,16 @@ with st.sidebar:
 
     if st.session_state["logged_in_token"]:
       token_key = st.session_state["logged_in_token"]
-      token_info = db.get(token_key, {})
-      rem_att = token_info.get("remaining", 0)
+      rem_att = get_current_attempts()
 
       st.success(f"Securely Authenticated: `{token_key}`")
-      st.info(f"⚡ Remaining Credits: **{rem_att}**")
+      st.metric("⚡ Remaining Credits", rem_att)
       if st.button("Secure Logout"):
         if token_key in db:
           db[token_key]["active_session"] = None
+          save_token_database(db)
         st.session_state["logged_in_token"] = None
+        st.session_state["token_charged_this_session"] = False
         st.rerun()
     else:
       st.warning("🔒 Enter Token (Single-Device Hardened)")
@@ -104,36 +219,33 @@ with st.sidebar:
         if clean_input in db:
           token_data = db[clean_input]
 
-          # Verify token status and remaining credits
           if token_data.get("status") != "Active":
             st.error("❌ Token has been disabled by Admin.")
           elif token_data["remaining"] <= 0:
             st.error("❌ Token has zero attempts remaining.")
           else:
-            existing_session = token_data.get("active_session")
-            # Prevent concurrent multi-system session sharing
-            if (
-                existing_session
-                and existing_session != st.session_state["my_session_id"]
-            ):
-              st.error(
-                  "❌ Security Violation: Token is already active on another"
-                  " computer/browser!"
-              )
-            else:
-              # Bind successfully and reset brute-force counters
-              db[clean_input]["active_session"] = st.session_state[
-                  "my_session_id"
-              ]
-              st.session_state["logged_in_token"] = clean_input
-              st.session_state["failed_login_attempts"] = 0
-              st.success("✅ Secure Access Granted!")
-              st.rerun()
+            # Deduct 1 credit precisely upon login, exactly once per session
+            if not st.session_state["token_charged_this_session"]:
+              if db[clean_input]["remaining"] > 0:
+                db[clean_input]["remaining"] -= 1
+                db[clean_input]["active_session"] = st.session_state[
+                    "my_session_id"
+                ]
+                save_token_database(db)
+                st.session_state["token_charged_this_session"] = True
+                # Clear cached admin input so it reflects new count instantly
+                widget_key = f"edit_rem_{clean_input}"
+                if widget_key in st.session_state:
+                  del st.session_state[widget_key]
+
+            st.session_state["logged_in_token"] = clean_input
+            st.session_state["failed_login_attempts"] = 0
+            st.success("✅ Secure Access Granted! 1 credit deducted.")
+            st.rerun()
         else:
-          # Track failed attempts for anti-brute force
           st.session_state["failed_login_attempts"] += 1
           if st.session_state["failed_login_attempts"] >= 3:
-            st.session_state["lockout_until"] = time.time() + 30  # 30s lockout
+            st.session_state["lockout_until"] = time.time() + 30
             st.error(
                 "🚨 Multiple invalid attempts detected. Locked out for 30"
                 " seconds."
@@ -144,35 +256,19 @@ with st.sidebar:
   st.divider()
   st.caption("© 2026 NexusAmz Suite | Secure IP Protected")
 
-# 3. Main Interface Header
+# =========================================================================
+# 3. MAIN INTERFACE HEADER
+# =========================================================================
 st.title("📦 NexusAmz VA & Merchant Automation Suite")
 st.markdown(
-    "**The All-In-One Enterprise Offline Toolkit for Daily Amazon Store"
-    " Management, FBA Calculations, and PPC Optimization**"
+    "**The All-In-One Enterprise Toolkit for Daily Amazon Store Management,"
+    " FBA Calculations, and PPC Optimization**"
 )
 st.divider()
 
-
-# Secure attempt consumption helper
-def consume_attempt():
-  token = st.session_state["logged_in_token"]
-  db = st.session_state["token_database"]
-  if token and token in db:
-    if db[token]["remaining"] > 0:
-      db[token]["remaining"] -= 1
-      return True
-  return False
-
-
-def get_current_attempts():
-  token = st.session_state["logged_in_token"]
-  db = st.session_state["token_database"]
-  if token and token in db:
-    return db[token]["remaining"]
-  return 0
-
-
-# 4. Multi-Arch Tabs
+# =========================================================================
+# 4. MULTI-ARCH TABS
+# =========================================================================
 tab1, tab2, tab3, tab4, tab5, tab6, tab_admin = st.tabs([
     "📝 1. Listing & Byte Validator",
     "🔍 2. Backend Keyword Optimizer",
@@ -183,16 +279,11 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab_admin = st.tabs([
     "🔐 Admin Dashboard",
 ])
 
-# =========================================================================
+# -------------------------------------------------------------------------
 # TAB 1: LISTING & BYTE VALIDATOR
-# =========================================================================
+# -------------------------------------------------------------------------
 with tab1:
   st.subheader("📝 Amazon Listing Character & Byte Validator & Auto-Suggester")
-  st.write(
-      "Check your Amazon Titles, Bullet Points, and Descriptions against"
-      " official Amazon limits."
-  )
-
   col1, col2 = st.columns(2)
   with col1:
     val_title = st.text_input(
@@ -219,7 +310,6 @@ with tab1:
             " buildup in your bag."
         ),
     )
-
   with col2:
     val_bullet3 = st.text_area(
         "Bullet Point 3 (Max 500 chars)",
@@ -245,16 +335,16 @@ with tab1:
         ),
     )
 
-  if st.button("🔍 Validate Listing & Generate Suggestions", use_container_width=True):
+  if st.button(
+      "🔍 Validate Listing & Generate Suggestions", use_container_width=True
+  ):
     if not st.session_state["logged_in_token"]:
       st.error(
           "🚨 Please enter a valid Secure Token in the left sidebar to run"
           " this tool."
       )
-    elif get_current_attempts() <= 0:
-      st.error("🚨 Token quota exhausted. Contact Admin.")
     else:
-      consume_attempt()
+      st.success("✅ Validation completed successfully!")
       st.write("### 📊 Validation Report & Smart Suggestions:")
 
       def analyze_and_suggest(text, max_limit, field_name):
@@ -276,42 +366,31 @@ with tab1:
               f"💡 **Suggested Compliant {field_name} (Trimmed):**\n`{trimmed}`"
           )
 
-
       analyze_and_suggest(val_title, 200, "Product Title")
       analyze_and_suggest(val_bullet1, 500, "Bullet Point 1")
       analyze_and_suggest(val_bullet2, 500, "Bullet Point 2")
       analyze_and_suggest(val_bullet3, 500, "Bullet Point 3")
       analyze_and_suggest(val_bullet4, 500, "Bullet Point 4")
       analyze_and_suggest(val_bullet5, 500, "Bullet Point 5")
-      st.info(
-          f"⚡ 1 attempt deducted. Remaining attempts:"
-          f" {get_current_attempts()}"
-      )
 
-
-# =========================================================================
+# -------------------------------------------------------------------------
 # TAB 2: BACKEND SEARCH TERM OPTIMIZER
-# =========================================================================
+# -------------------------------------------------------------------------
 with tab2:
   st.subheader("🔍 Amazon Backend Search Terms Optimizer & Deduplicator")
-  st.write(
-      "Clean your backend keywords: removes commas, filters stop words, and"
-      " enforces the 249-byte limit."
-  )
-
   raw_keywords = st.text_area(
       "Paste your raw keyword list (comma or space separated):",
       value=(
           "water bottle, insulated flask, gym bottle for men, water bottle,"
           " vacuum cup, cold flask"
       ),
+      key="raw_kw_box",
   )
 
   if st.button("⚙️ Optimize & Pack Backend Terms", use_container_width=True):
-    if not st.session_state["logged_in_token"] or get_current_attempts() <= 0:
+    if not st.session_state["logged_in_token"]:
       st.error("🚨 Secure authentication required.")
     else:
-      consume_attempt()
       cleaned_input = re.sub(r"[^\w\s]", " ", raw_keywords)
       tokens = cleaned_input.lower().split()
       stop_words = {
@@ -329,7 +408,6 @@ with tab2:
           "by",
       }
       filtered_tokens = [t for t in tokens if t not in stop_words]
-
       unique_tokens = []
       for token in filtered_tokens:
         if token not in unique_tokens:
@@ -349,16 +427,16 @@ with tab2:
           "Copy into Amazon Seller Central (Max 249 bytes):",
           value=packed_string,
           height=100,
+          key="packed_out_box",
       )
       st.info(
           f"📊 **Final Stats:** {len(packed_string)} Characters | **{byte_count} /"
-          f" 249 Bytes Used** | Attempts left: {get_current_attempts()}"
+          " 249 Bytes Used**"
       )
 
-
-# =========================================================================
+# -------------------------------------------------------------------------
 # TAB 3: FBA PROFIT & ROI CALCULATOR
-# =========================================================================
+# -------------------------------------------------------------------------
 with tab3:
   st.subheader("💰 Amazon FBA Profit, Margin & ROI Calculator")
   col_p1, col_p2 = st.columns(2)
@@ -374,7 +452,9 @@ with tab3:
     )
   with col_p2:
     referral_fee_pct = (
-        st.slider("Amazon Referral Fee (%)", min_value=5.0, max_value=20.0, value=15.0)
+        st.slider(
+            "Amazon Referral Fee (%)", min_value=5.0, max_value=20.0, value=15.0
+        )
         / 100.0
     )
     fba_fulfillment_fee = st.number_input(
@@ -385,10 +465,9 @@ with tab3:
     )
 
   if st.button("🧮 Calculate FBA Profitability", use_container_width=True):
-    if not st.session_state["logged_in_token"] or get_current_attempts() <= 0:
+    if not st.session_state["logged_in_token"]:
       st.error("🚨 Secure authentication required.")
     else:
-      consume_attempt()
       ref_fee_amt = selling_price * referral_fee_pct
       total_cost = (
           manufacturing_cost
@@ -400,6 +479,7 @@ with tab3:
       profit_margin = (net_profit / selling_price) * 100
       roi = (net_profit / (manufacturing_cost + shipping_to_amz)) * 100
 
+      st.success("✅ Profitability calculated successfully!")
       st.write("### 📈 Financial Summary:")
       res_col1, res_col2, res_col3, res_col4 = st.columns(4)
       res_col1.metric("Net Profit per Unit", f"${net_profit:.2f}")
@@ -408,15 +488,10 @@ with tab3:
       res_col4.metric(
           "Total Amazon Fees", f"${ref_fee_amt + fba_fulfillment_fee:.2f}"
       )
-      st.info(
-          f"⚡ 1 attempt deducted. Remaining attempts:"
-          f" {get_current_attempts()}"
-      )
 
-
-# =========================================================================
+# -------------------------------------------------------------------------
 # TAB 4: PPC NEGATIVE KEYWORD FINDER
-# =========================================================================
+# -------------------------------------------------------------------------
 with tab4:
   st.subheader("📉 Amazon PPC Search Term Negatives Analyzer")
   ppc_file = st.file_uploader(
@@ -439,10 +514,9 @@ with tab4:
       if st.button(
           "🔍 Extract Wasteful Search Terms", use_container_width=True
       ):
-        if not st.session_state["logged_in_token"] or get_current_attempts() <= 0:
+        if not st.session_state["logged_in_token"]:
           st.error("🚨 Secure authentication required.")
         else:
-          consume_attempt()
           clicks_col = next(
               (c for c in ppc_df.columns if "click" in c.lower()), None
           )
@@ -494,10 +568,9 @@ with tab4:
     except Exception as e:
       st.error(f"Error reading file: {e}")
 
-
-# =========================================================================
+# -------------------------------------------------------------------------
 # TAB 5: INVENTORY RESTOCK FORECASTER
-# =========================================================================
+# -------------------------------------------------------------------------
 with tab5:
   st.subheader("📦 Amazon FBA Inventory Restock & Days-of-Supply Forecaster")
   col_inv1, col_inv2 = st.columns(2)
@@ -517,10 +590,9 @@ with tab5:
     )
 
   if st.button("📊 Calculate Restock Schedule", use_container_width=True):
-    if not st.session_state["logged_in_token"] or get_current_attempts() <= 0:
+    if not st.session_state["logged_in_token"]:
       st.error("🚨 Secure authentication required.")
     else:
-      consume_attempt()
       days_of_supply = current_stock / daily_sales_velocity
       reorder_point_days = supplier_lead_time + safety_stock_days
       target_inventory_days = reorder_point_days + 30
@@ -528,29 +600,18 @@ with tab5:
           0, int((target_inventory_days * daily_sales_velocity) - current_stock)
       )
 
+      st.success("✅ Restock schedule calculated successfully!")
       st.write("### 📋 Inventory Forecast Report:")
       r_col1, r_col2, r_col3 = st.columns(3)
       r_col1.metric("Days of Supply Remaining", f"{days_of_supply:.1f} Days")
       r_col2.metric("Reorder Threshold", f"{reorder_point_days} Days")
       r_col3.metric("Recommended Reorder Qty", f"{recommended_order_qty} Units")
-      st.info(
-          f"⚡ 1 attempt deducted. Remaining attempts:"
-          f" {get_current_attempts()}"
-      )
 
-
-# =========================================================================
+# -------------------------------------------------------------------------
 # TAB 6: PPC BID OPTIMIZER & TARGET ADJUSTER
-# =========================================================================
+# -------------------------------------------------------------------------
 with tab6:
   st.subheader("🎯 Amazon PPC Bid Optimizer & Target Adjuster")
-  st.write(
-      "Upload your Amazon Advertising / Search Term / Targeting report. The"
-      " app will automatically recognize **Spend**, **Sales**, and **Bids**"
-      " (or estimate effective CPC from Spend/Clicks) to calculate optimized"
-      " bids."
-  )
-
   col_b1, col_b2, col_b3 = st.columns(3)
   with col_b1:
     target_acos = (
@@ -579,11 +640,9 @@ with tab6:
       st.dataframe(b_df.head(3), use_container_width=True, hide_index=True)
 
       if st.button("🚀 Calculate Optimized Bids", use_container_width=True):
-        if not st.session_state["logged_in_token"] or get_current_attempts() <= 0:
+        if not st.session_state["logged_in_token"]:
           st.error("🚨 Secure authentication required.")
         else:
-          consume_attempt()
-
           spend_col = next(
               (c for c in b_df.columns if "spend" in c.lower()), None
           )
@@ -661,10 +720,6 @@ with tab6:
                 mime="text/csv",
                 use_container_width=True,
             )
-            st.info(
-                f"⚡ 1 attempt deducted. Remaining attempts:"
-                f" {get_current_attempts()}"
-            )
           else:
             st.error(
                 "🚨 Could not detect required columns ('Spend' and 'Sales')"
@@ -673,30 +728,35 @@ with tab6:
     except Exception as e:
       st.error(f"Error processing bid report: {e}")
 
-
-# =========================================================================
-# TAB 7: ADMIN DASHBOARD (SECURED & HARDENED)
-# =========================================================================
+# -------------------------------------------------------------------------
+# TAB 7: ADMIN DASHBOARD
+# -------------------------------------------------------------------------
 with tab_admin:
   st.subheader("🔐 Admin Master Control Panel")
-  st.write(
-      "Restricted secure area. Enter your master password to manage client"
-      " tokens, monitor session locks, and enforce security policies."
-  )
 
-  admin_input_pass = st.text_input(
-      "Enter Admin Password", type="password", key="admin_pwd_box"
-  )
+  if not st.session_state["admin_logged_in"]:
+    st.warning("⚠️ Restricted Area. Master Password Required.")
+    admin_input_pass = st.text_input(
+        "Enter Admin Password", type="password", key="admin_pwd_login_box"
+    )
 
-  if admin_input_pass == st.session_state["admin_password"]:
-    st.success("🔓 Master Admin Access Verified!")
+    if st.button("Unlock Admin Panel"):
+      if admin_input_pass == st.session_state["admin_password"]:
+        st.session_state["admin_logged_in"] = True
+        st.success("✅ Access Granted!")
+        st.rerun()
+      else:
+        st.error("❌ Incorrect Admin Password.")
+  else:
+    st.success("🔓 Master Admin Access Verified")
+    if st.button("🔒 Lock / Logout Admin Panel"):
+      st.session_state["admin_logged_in"] = False
+      st.rerun()
+
     st.divider()
 
-    # Section 1: Token Management & Security Status
-    st.write(
-        "### 👥 Client Token Security, Live Session & Status Control"
-    )
-    token_db = st.session_state["token_database"]
+    st.write("### 👥 Client Token Security, Live Session & Status Control")
+    token_db = load_token_database()
 
     if token_db:
       for t_name, data in list(token_db.items()):
@@ -705,6 +765,14 @@ with tab_admin:
         used_att = max_att - rem_att
         active_sess = data.get("active_session")
         status = data.get("status", "Active")
+
+        # Sync the admin number input widget session state so it never holds stale values
+        widget_key = f"edit_rem_{t_name}"
+        if (
+            widget_key not in st.session_state
+            or st.session_state[widget_key] != rem_att
+        ):
+          st.session_state[widget_key] = rem_att
 
         col_a, col_b, col_c, col_d, col_e, col_f = st.columns([
             2,
@@ -717,34 +785,36 @@ with tab_admin:
         col_a.markdown(f"**Token:** `{t_name}`")
         col_b.metric("Used", f"{used_att}x")
 
-        # Status toggle (Active / Disabled)
         new_status = col_c.selectbox(
             "Status",
             ["Active", "Disabled"],
             index=0 if status == "Active" else 1,
             key=f"status_{t_name}",
         )
-        token_db[t_name]["status"] = new_status
+        if new_status != token_db[t_name].get("status"):
+          token_db[t_name]["status"] = new_status
+          save_token_database(token_db)
 
-        # Show live session lock indicator
         if active_sess:
           col_d.markdown("🟢 **Locked**")
         else:
           col_d.markdown("⚪ **Free**")
 
         new_rem = col_e.number_input(
-            "Remaining", value=rem_att, key=f"edit_rem_{t_name}", min_value=0
+            "Remaining", key=widget_key, min_value=0
         )
-        token_db[t_name]["remaining"] = new_rem
+        if new_rem != token_db[t_name]["remaining"]:
+          token_db[t_name]["remaining"] = new_rem
+          save_token_database(token_db)
 
         if col_f.button("🗑️ Delete", key=f"del_{t_name}"):
           del token_db[t_name]
+          save_token_database(token_db)
           st.rerun()
         st.markdown("---")
 
     st.divider()
 
-    # Section 2: Generate New Secure Token
     st.write("### ➕ Generate New Secure Client Token")
     col_n1, col_n2 = st.columns(2)
     with col_n1:
@@ -759,15 +829,17 @@ with tab_admin:
     if st.button("Generate Secure Token"):
       if new_token_name:
         clean_name = new_token_name.strip()
-        st.session_state["token_database"][clean_name] = {
+        current_db = load_token_database()
+        current_db[clean_name] = {
             "max_attempts": new_token_attempts,
             "remaining": new_token_attempts,
             "active_session": None,
             "status": "Active",
         }
+        save_token_database(current_db)
         st.success(
-            f"✅ Secure token `{clean_name}` generated successfully with"
-            f" single-device locking!"
+            f"✅ Secure token `{clean_name}` saved permanently to disk with"
+            " single-device locking!"
         )
         st.rerun()
       else:
@@ -775,20 +847,11 @@ with tab_admin:
 
     st.divider()
 
-    # Section 3: Change Admin Password
     st.write("### 🔑 Update Master Admin Password")
     new_admin_pass = st.text_input("New Admin Password", type="password")
     if st.button("Update Admin Password"):
       if new_admin_pass:
         st.session_state["admin_password"] = new_admin_pass
-        st.success("✅ Admin password updated successfully!")
+        st.success("✅ Admin password updated successfully for this session!")
       else:
         st.error("Password cannot be empty.")
-
-  elif admin_input_pass != "":
-    st.error("❌ Incorrect Admin Password. Access Denied.")
-  else:
-    st.info(
-        "💡 Default admin password is: `Muhammad&021`. Type it above to unlock"
-        " control."
-    )
