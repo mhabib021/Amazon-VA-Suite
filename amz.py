@@ -1,6 +1,7 @@
 import io, json, os, re, time, uuid
 import pandas as pd
 import streamlit as st
+from scrapfly import ScrapflyClient, ScrapeConfig
 
 st.set_page_config(page_title="NexusAmz Suite", page_icon="🛡️", layout="wide")
 st.markdown("""<style>
@@ -13,12 +14,26 @@ st.markdown("""<style>
  padding:16px;border-radius:12px}
 .stButton>button{background:linear-gradient(135deg,#0284c7,#0369a1);color:#fff;font-weight:600;
  border:none;border-radius:8px;padding:.6rem 1.2rem}
+.sidebar-footer {
+    position: fixed; 
+    bottom: 0; 
+    left: 0;
+    width: 100%; 
+    text-align: center; 
+    padding: 15px; 
+    font-size: 14px; 
+    font-weight: bold;
+    color: #cbd5e1; 
+    border-top: 1px solid #334155; 
+    background: #0f172a;
+    z-index: 999;
+}
 </style>""", unsafe_allow_html=True)
 
 TOKEN_FILE = "tokens.json"
 
 # =========================================================================
-# UNIVERSAL FILE READER — supports CSV, XLSX, XLS, XLSM
+# UNIVERSAL FILE READER
 # =========================================================================
 SUPPORTED_EXTS = ["csv", "xlsx", "xls", "xlsm"]
 
@@ -48,10 +63,7 @@ def read_uploaded_file(uploaded_file):
                 return pd.read_csv(uploaded_file), None
     except ImportError as ie:
         pkg = "openpyxl" if ext in ("xlsx", "xlsm") else "xlrd"
-        return None, (
-            f"❌ Missing dependency to read **.{ext}** files. "
-            f"Install it with:\n\n```\npip install {pkg}\n```\n\n_Detail: {ie}_"
-        )
+        return None, f"❌ Missing dependency. Run: pip install {pkg}\n_Detail: {ie}_"
     except Exception as e:
         return None, f"❌ Could not read **{uploaded_file.name}**: {e}"
 
@@ -59,29 +71,17 @@ def read_uploaded_file(uploaded_file):
 # GTIN NORMALIZATION
 # =========================================================================
 def _norm_gtin(x):
-    """
-    Normalize a GTIN/UPC/EAN to a 13-digit zero-padded string.
-    - Strips non-digits
-    - Pads UPC-12 to EAN-13 by prepending 0
-    - Pads shorter values to 13 with zfill
-    - NEVER uses int(float()) — that destroys leading zeros and broke the merge.
-    """
-    if pd.isna(x):
-        return None
+    if pd.isna(x): return None
     s = str(x).strip()
-    if s.endswith(".0"):
-        s = s[:-2]
+    if s.endswith(".0"): s = s[:-2]
     s = re.sub(r"\D", "", s)
-    if not s:
-        return None
-    if len(s) == 12:
-        s = "0" + s
-    if len(s) < 13:
-        s = s.zfill(13)
+    if not s: return None
+    if len(s) == 12: s = "0" + s
+    if len(s) < 13: s = s.zfill(13)
     return s
 
 # =========================================================================
-# TRANSLATIONS
+# FULL TRANSLATIONS
 # =========================================================================
 LANGS = ["English","Deutsch","Español","Italiano","Türkçe","Polski",
          "Nederlands","Svenska","Português","Français","العربية"]
@@ -98,14 +98,6 @@ T = {
 "acos":       ["ACOS Tracking & Budget","ACOS-Verfolgung & Budget","Seguimiento ACOS y Presupuesto","Monitoraggio ACOS e Budget","ACOS Takibi ve Bütçe","Śledzenie ACOS i Budżet","ACOS-tracking & Budget","ACOS-spårning & Budget","Rastreamento de ACOS e Orçamento","Suivi ACOS & Budget","تتبع ACOS والميزانية"],
 "admin":      ["Admin Dashboard","Admin-Dashboard","Panel de Administración","Pannello di Amministrazione","Yönetici Paneli","Panel Administratora","Beheerdersdashboard","Adminpanel","Painel de Administração","Tableau de Bord Admin","لوحة الإدارة"],
 "btn_auth":   ["Authenticate Securely","Sicher Authentifizieren","Autenticar de Forma Segura","Autentica in Modo Sicuro","Güvenli Doğrulama Yap","Uwierzytelnij Bezpiecznie","Beveiligd Authenticeren","Autentisera Säkert","Autenticar com Segurança","Authentification Sécurisée","مصادقة آمنة"],
-"btn_calc":   ["🧮 Calculate FBA Profitability","🧮 FBA Rentabilität Berechnen","🧮 Calcular Rentabilidad FBA","🧮 Calcola Redditività FBA","🧮 FBA Karlılığını Hesapla","🧮 Oblicz Rentowność FBA","🧮 Bereken FBA Rendement","🧮 Beräkna FBA Lönsamhet","🧮 Calcular Lucratividade FBA","🧮 Calculer la Rentabilité FBA","🧮 حساب ربحية FBA"],
-"btn_gen":    ["🚀 Generate Adaptive Listing","🚀 Adaptives Listing Generieren","🚀 Generar Listado Adaptativo","🚀 Genera Listing Adattivo","🚀 Uyumlu İlan Oluştur","🚀 Generuj Adaptacyjną Ofertę","🚀 Genereer Aanpasbare Listing","🚀 Generera Anpassad Listing","🚀 Gerar Anúncio Adaptativo","🚀 Générer une Fiche Produit Adaptative","🚀 إنشاء قائمة منتجات متكيفة"],
-"btn_val":    ["🔍 Validate Listing & Generate Suggestions","🔍 Listing Prüfen & Vorschläge Erstellen","🔍 Validar Listado y Generar Sugerencias","🔍 Valida Listing e Genera Suggerimenti","🔍 İlanı Doğrula ve Öneriler Üret","🔍 Waliduj Ofertę i Generuj Sugestie","🔍 Valideer Listing & Genereer Suggesties","🔍 Validera Listing & Skapa Förslag","🔍 Validar Anúncio e Gerar Sugestões","🔍 Valider le Listing & Générer des Suggestions","🔍 التحقق من القائمة وتوليد الاقتراحات"],
-"btn_opt":    ["⚙️ Optimize & Pack Backend Terms","⚙️ Backend-Begriffe Optimieren","⚙️ Optimizar y Compactar Términos Backend","⚙️ Ottimizza e Compatta Termini Backend","⚙️ Arka Plan Terimlerini Optimize Et","⚙️ Optymalizuj Słowa Backendowe","⚙️ Optimaliseer Backend Zoektermen","⚙️ Optimera Backend Söktermer","⚙️ Otimizar e Compactar Termos Backend","⚙️ Optimiser & Compacter les Termes Backend","⚙️ تحسين وضغط الكلمات الخلفية"],
-"btn_inv":    ["📊 Calculate Restock Schedule","📊 Nachbestellplan Berechnen","📊 Calcular Calendario de Reabastecimiento","📊 Calcola Programma di Rifornimento","📊 Yeniden Sipariş Takvimini Hesapla","📊 Oblicz Harmonogram Uzupełniania Zapasów","📊 Bereken Herbestelschema","📊 Beräkna Påfyllningsschema","📊 Calcular Cronograma de Reestocagem","📊 Calculer le Calendrier de Réapprovisionnement","📊 حساب جدول إعادة الطلب"],
-"btn_neg":    ["🔍 Extract Wasteful Search Terms","🔍 Unrentable Suchbegriffe Extrahieren","🔍 Extraer Términos de Búsqueda Inútiles","🔍 Estrai Termini di Ricerca Inutili","🔍 Verimsiz Arama Terimlerini Ayıkla","🔍 Wyodrębnij Nieefektywne Frazy","🔍 Onrendabele Zoektermen Extraheren","🔍 Extrahera Onödiga Söktermer","🔍 Extrair Termos de Pesquisa Ineficientes","🔍 Extraire les Termes de Recherche Inutiles","🔍 استخراج مصطلحات البحث الهادرة"],
-"btn_bid":    ["🚀 Calculate Optimized Bids","🚀 Optimierte Gebote Berechnen","🚀 Calcular Pujas Optimizadas","🚀 Calcola Offerte Ottimizzate","🚀 Optimize Edilmiş Teklifleri Hesapla","🚀 Oblicz Zoptymalizowane Stawki","🚀 Bereken Geoptimaliseerde Biedingen","🚀 Beräkna Optimerade Bud","🚀 Calcular Lances Otimizados","🚀 Calculer les Enchères Optimisées","🚀 حساب عروض الأسعار المحسّنة"],
-"btn_acos":   ["📈 Analyze TACOS & Budget Health","📈 TACOS & Budget-Gesundheit Analysieren","📈 Analizar Salud de TACOS y Presupuesto","📈 Analizza Salute TACOS e Budget","📈 TACOS ve Bütçe Sağlığını Analiz Et","📈 Analizuj Stan TACOS i Budżetu","📈 Analyseer TACOS & Budgetgezondheid","📈 Analysera TACOS & Budgethälsa","📈 Analisar Saúde do TACOS e Orçamento","📈 Analyser la Santé TACOS & Budget","📈 تحليل صحة TACOS والميزانية"],
 "btn_logout": ["Secure Logout","Sicher Abmelden","Cerrar Sesión","Disconnessione Sicura","Güvenli Çıkış","Bezpieczne Wylogowanie","Veilig Uitloggen","Säker Logga Ut","Sair com Segurança","Déconnexion Sécurisée","تسجيل الخروج الآمن"],
 "auth_sub":   ["Authenticate your secure access token below.","Authentifizieren Sie unten Ihren Zugangstoken.","Autentique su token de acceso seguro.","Autentica il tuo token di accesso sicuro.","Güvenli erişim token'ınızı doğrulayın.","Uwierzytelnij swój token dostępu.","Authenticeer uw beveiligde toegangstoken.","Autentisera din säkra åtkomsttoken.","Autentique seu token de acesso seguro.","Authentifiez votre jeton d'accès.","قم بالمصادقة باستخدام رمز الوصول الخاص بك."],
 "auth_info":  ["🔒 Enter your token (single-device)","🔒 Token eingeben (Einzelgerät)","🔒 Introduzca su token (dispositivo único)","🔒 Inserisci il tuo token (dispositivo singolo)","🔒 Token'ınızı girin (tek cihaz)","🔒 Wprowadź token (jedno urządzenie)","🔒 Voer uw token in (één apparaat)","🔒 Ange din token (en enhet)","🔒 Insira seu token (dispositivo único)","🔒 Entrez votre jeton (monodispositif)","🔒 أدخل رمزك (جهاز واحد)"],
@@ -225,21 +217,20 @@ T = {
 "admin_pwd_empty":["Password cannot be empty.","Passwort darf nicht leer sein.","La contraseña no puede estar vacía.","La password non può essere vuota.","Şifre boş olamaz.","Hasło nie może być puste.","Wachtwoord mag niet leeg zijn.","Lösenordet kan inte vara tomt.","A senha não pode estar vazia.","Le mot de passe ne peut pas être vide.","لا يمكن أن تكون كلمة المرور فارغة."],
 "admin_bad_pwd":["❌ Invalid admin password.","❌ Ungültiges Admin-Passwort.","❌ Contraseña inválida.","❌ Password non valida.","❌ Geçersiz şifre.","❌ Nieprawidłowe hasło.","❌ Ongeldig wachtwoord.","❌ Ogiltigt lösenord.","❌ Senha inválida.","❌ Mot de passe invalide.","❌ كلمة مرور غير صالحة."],
 "admin_new_ok":["✅ Token {t} created with {n} credits!","✅ Token {t} mit {n} Guthaben erstellt!","✅ ¡Token {t} creado con {n} créditos!","✅ Token {t} creato con {n} crediti!","✅ Token {t} oluşturuldu ({n} kredi)!","✅ Token {t} utworzony ({n} kredytów)!","✅ Token {t} aangemaakt ({n} credits)!","✅ Token {t} skapad ({n} krediter)!","✅ Token {t} criado ({n} créditos)!","✅ Token {t} créé avec {n} crédits !","✅ تم إنشاء الرمز {t} بـ {n} رصيد!"],
-"def_prod":   ["Nutcracker Clara Ballerina Doll","Nussknacker Clara Ballerina Puppe","Muñeca Bailarina Clara","Bambola Ballerina Clara","Fındıkkıran Clara Bebeği","Lalka Baletnica Klara","Notenkraker Clara Pop","Nötknäpparen Clara Docka","Boneca Bailarina Clara","Poupée Ballerine Clara","دمية باليرينا كلارا"],
-"def_var":    ["Ombre Tutu Transformation","Ombre Tutu Verwandlung","Transformación Tutú Ombre","Trasformazione Tutù Ombre","Ombre Tütü Dönüşümü","Transformacja Tutu Ombre","Ombre Tutu Transformatie","Ombre Tutu Transformation","Transformação Tutu Ombre","Transformation Tutu Ombré","تحول توتو أومبريه"],
-"def_feat":   ["Surprise tutu transformation when arms twirl\nIncludes bow headband, heart locket, gift box\n7 poseable joints for realistic ballet practice\nRecommended for kids ages 3+","Überraschende Tutu-Verwandlung beim Drehen\nEnthält Schleifen-Haarband, Herz-Medaillon, Geschenkbox\n7 bewegliche Gelenke für Ballett-Üben\nEmpfohlen für Kinder ab 3 Jahren","Transformación sorpresa al girar los brazos\nIncluye diadema, colgante de corazón, caja de regalo\n7 articulaciones para ballet\nRecomendado para niños 3+","Trasformazione sorpresa quando le braccia girano\nInclude fascia, ciondolo cuore, confezione regalo\n7 articolazioni per balletto\nConsigliato dai 3 anni","Kollar döndüğünde sürpriz tütü dönüşümü\nKurdele, kalp kolye, hediye kutusu içerir\n7 hareketli eklem\n3 yaş ve üzeri için","Niespodziewana transformacja tutu\nZawiera opaskę, naszyjnik serce, pudełko\n7 ruchomych przegubów\nDla dzieci od 3 lat","Verrassende tutu transformatie\nInclusief strik, hart ketting, cadeaudoos\n7 buigbare gewrichten\nAanbevolen vanaf 3 jaar","Överraskande tutu-transformation\nInnehåller hårband, hjärtmedaljong, presentlåda\n7 rörliga leder\nRekommenderas från 3 år","Transformação surpresa ao girar os braços\nInclui tiara, colar coração, caixa presente\n7 articulações para balé\nRecomendado para 3+","Transformation tutu surprise\nComprend serre-tête, collier cœur, boîte cadeau\n7 articulations pour ballet\nRecommandé dès 3 ans","تحول توتو مفاجئ عند دوران الذراعين\nيشمل عصابة، قلادة قلب، صندوق هدايا\n7 مفاصل للباليه\nموصى به من 3 سنوات"],
-"def_kw":     ["ballerina doll, nutcracker toy, princess gift set, dance toy, kids ballet doll","ballerina puppe, nussknacker spielzeug, prinzessin geschenkset, tanzspielzeug, kinder ballettpuppe","muñeca bailarina, juguete cascanueces, set regalo princesa, juguete baile, muñeca ballet niños","bambola ballerina, giocattolo schiaccianoci, set regalo principessa, giocattolo danza, bambola balletto","bale bebeği, fındıkkıran oyuncak, prenses hediye seti, dans oyuncağı, çocuk bale bebeği","lalka baletnica, zabawka dziadek, zestaw księżniczki, zabawka taniec, lalka baletowa","ballerina pop, notenkraker speelgoed, prinses cadeauset, dansspeelgoed, balletpop","ballerinadocka, nötknäpparleksak, prinsesspresentset, dansleksak, balettdocka","boneca bailarina, brinquedo quebra-nozes, conjunto princesa, brinquedo dança, boneca balé","poupée ballerine, jouet casse-noisette, coffret princesse, jouet danse, poupée ballet","دمية باليرينا, لعبة كسارة البندق, طقم هدايا أميرة, لعبة رقص, دمية باليه للأطفال"],
 "ws_prepare": ["📥 Vendor File Preparation","📥 Lieferanten-Datei Aufbereitung","📥 Preparación de Archivo","📥 Preparazione File Fornitore","📥 Tedarikçi Dosyası Hazırlığı","📥 Przygotowanie Pliku","📥 Leverancier Bestand Voorbereiding","📥 Leverantörsfil Förberedelse","📥 Preparação de Arquivo","📥 Préparation du Fichier","📥 إعداد ملف المورد"],
 "ws_catalog": ["📦 Supplier Catalog Analyzer","📦 Lieferanten-Katalog-Analysator","📦 Analizador de Catálogo","📦 Analizzatore Catalogo","📦 Tedarikçi Katalog Analizörü","📦 Analizator Katalogu","📦 Leverancier Catalogus","📦 Leverantörskatalog","📦 Analisador de Catálogo","📦 Analyseur de Catalogue","📦 محلل كتالوج المورد"],
 "ws_deal":    ["🎯 Deal Verifier (Single ASIN)","🎯 Deal-Prüfer (Einzelne ASIN)","🎯 Verificador de Ofertas","🎯 Verificatore Offerte","🎯 Fırsat Doğrulayıcı","🎯 Weryfikator Ofert","🎯 Deal Verificator","🎯 Affärsverifierare","🎯 Verificador de Ofertas","🎯 Vérificateur d'Offre","🎯 مدقق الصفقات"],
 "ws_portfolio":["📊 Wholesale Portfolio Tracker","📊 Großhandels-Portfolio-Tracker","📊 Rastreador de Cartera","📊 Tracker Portafoglio","📊 Toptan Portföy Takipçisi","📊 Tracker Portfela","📊 Groothandel Portfolio","📊 Grossistportfölj","📊 Rastreador de Portfólio","📊 Suivi de Portefeuille","📊 متتبع المحفظة"],
 "ws_heading": ["🏷️ WholeSale Features","🏷️ Großhandel-Funktionen","🏷️ Funciones de Mayoreo","🏷️ Funzionalità Ingrosso","🏷️ Toptan Özellikleri","🏷️ Funkcje Hurtowe","🏷️ Groothandel Functies","🏷️ Grossistfunktioner","🏷️ Recursos de Atacado","🏷️ Fonctionnalités de Gros","🏷️ ميزات البيع بالجملة"],
+"def_prod":   ["Nutcracker Clara Ballerina Doll","Nussknacker Clara Ballerina Puppe","Muñeca Bailarina Clara","Bambola Ballerina Clara","Fındıkkıran Clara Bebeği","Lalka Baletnica Klara","Notenkraker Clara Pop","Nötknäpparen Clara Docka","Boneca Bailarina Clara","Poupée Ballerine Clara","دمية باليرينا كلارا"],
+"def_var":    ["Ombre Tutu Transformation","Ombre Tutu Verwandlung","Transformación Tutú Ombre","Trasformazione Tutù Ombre","Ombre Tütü Dönüşümü","Transformacja Tutu Ombre","Ombre Tutu Transformatie","Ombre Tutu Transformation","Transformação Tutu Ombre","Transformation Tutu Ombré","تحول توتو أومبريه"],
+"def_feat":   ["Surprise tutu transformation when arms twirl\nIncludes bow headband, heart locket, gift box\n7 poseable joints for realistic ballet practice\nRecommended for kids ages 3+","Überraschende Tutu-Verwandlung beim Drehen\nEnthält Schleifen-Haarband, Herz-Medaillon, Geschenkbox\n7 bewegliche Gelenke für Ballett-Üben\nEmpfohlen für Kinder ab 3 Jahren","Transformación sorpresa al girar los brazos\nIncluye diadema, colgante de corazón, caja de regalo\n7 articulaciones para ballet\nRecomendado para niños 3+","Trasformazione sorpresa quando le braccia girano\nInclude fascia, ciondolo cuore, confezione regalo\n7 articolazioni per balletto\nConsigliato dai 3 anni","Kollar döndüğünde sürpriz tütü dönüşümü\nKurdele, kalp kolye, hediye kutusu içerir\n7 hareketli eklem\n3 yaş ve üzeri için","Niespodziewana transformacja tutu\nZawiera opaskę, naszyjnik serce, pudełko\n7 ruchomych przegubów\nDla dzieci od 3 lat","Verrassende tutu transformatie\nInclusief strik, hart ketting, cadeaudoos\n7 buigbare gewrichten\nAanbevolen vanaf 3 jaar","Överraskande tutu-transformation\nInnehåller hårband, hjärtmedaljong, presentlåda\n7 rörliga leder\nRekommenderas från 3 år","Transformação surpresa ao girar os braços\nInclui tiara, colar coração, caixa presente\n7 articulações para balé\nRecomendado para 3+","Transformation tutu surprise\nComprend serre-tête, collier cœur, boîte cadeau\n7 articulations pour ballet\nRecommandé dès 3 ans","تحول توتو مفاجئ عند دوران الذراعين\nيشمل عصابة، قلادة قلب، صندوق هدايا\n7 مفاصل للباليه\nموصى به من 3 سنوات"],
+"def_kw":     ["ballerina doll, nutcracker toy, princess gift set, dance toy, kids ballet doll","ballerina puppe, nussknacker spielzeug, prinzessin geschenkset, tanzspielzeug, kinder ballettpuppe","muñeca bailarina, juguete cascanueces, set regalo princesa, juguete baile, muñeca ballet niños","bambola ballerina, giocattolo schiaccianoci, set regalo principessa, giocattolo danza, bambola balletto","bale bebeği, fındıkkıran oyuncak, prenses hediye seti, dans oyuncağı, çocuk bale bebeği","lalka baletnica, zabawka dziadek, zestaw księżniczki, zabawka taniec, lalka baletowa","ballerina pop, notenkraker speelgoed, prinses cadeauset, dansspeelgoed, balletpop","ballerinadocka, nötknäpparleksak, prinsesspresentset, dansleksak, balettdocka","boneca bailarina, brinquedo quebra-nozes, conjunto princesa, brinquedo dança, boneca balé","poupée ballerine, jouet casse-noisette, coffret princesse, jouet danse, poupée ballet","دمية باليرينا, لعبة كسارة البندق, طقم هدايا أميرة, لعبة رقص, دمية باليه للأطفال"],
 }
 
 def L(key, i):
     vals = T.get(key)
-    if not vals:
-        return key
+    if not vals: return key
     return vals[i] if i < len(vals) else vals[0]
 
 # =========================================================================
@@ -249,11 +240,7 @@ def _normalize_tokens(tokens):
     out = {}
     for k, v in tokens.items():
         if isinstance(v, dict):
-            out[k] = {
-                "attempts":  int(v.get("attempts", v.get("credits", 100))),
-                "active":    bool(v.get("active", True)),
-                "session_id": v.get("session_id", None),
-            }
+            out[k] = {"attempts": int(v.get("attempts", v.get("credits", 100))), "active": bool(v.get("active", True)), "session_id": v.get("session_id", None)}
         elif isinstance(v, (int, float)) and not isinstance(v, bool):
             out[k] = {"attempts": int(v), "active": True, "session_id": None}
         elif isinstance(v, bool):
@@ -264,47 +251,25 @@ def _normalize_tokens(tokens):
 
 def load_tokens():
     if not os.path.exists(TOKEN_FILE):
-        defaults = {
-            "NEXUS-DEMO-2026":  {"attempts": 1000,   "active": True, "session_id": None},
-            "ADMIN-SECRET-KEY": {"attempts": 999999, "active": True, "session_id": None},
-        }
-        with open(TOKEN_FILE, "w") as f:
-            json.dump(defaults, f, indent=4)
+        defaults = {"NEXUS-DEMO-2026": {"attempts": 1000, "active": True, "session_id": None}, "ADMIN-SECRET-KEY": {"attempts": 999999, "active": True, "session_id": None}}
+        with open(TOKEN_FILE, "w") as f: json.dump(defaults, f, indent=4)
         return defaults
     with open(TOKEN_FILE, "r") as f:
-        try:
-            raw = json.load(f)
-        except (json.JSONDecodeError, ValueError):
-            raw = {}
-    tokens = _normalize_tokens(raw)
-    if tokens != raw:
-        try:
-            with open(TOKEN_FILE, "w") as f:
-                json.dump(tokens, f, indent=4)
-        except Exception:
-            pass
-    return tokens
+        try: raw = json.load(f)
+        except: raw = {}
+    return _normalize_tokens(raw)
 
 def save_tokens(tokens):
-    with open(TOKEN_FILE, "w") as f:
-        json.dump(tokens, f, indent=4)
+    with open(TOKEN_FILE, "w") as f: json.dump(tokens, f, indent=4)
 
 # =========================================================================
 # SESSION STATE
 # =========================================================================
 for k, v in {
-    "tokens": load_tokens(),
-    "authenticated": False,
-    "current_token": None,
-    "admin_unlocked": False,
-    "failed_attempts": 0,
-    "lockout_time": 0,
-    "master_admin_password": "admin",
-    "session_id": str(uuid.uuid4()),
-    "pm_api_key": "",
-    "prepared_catalog": None,
-    "use_mock_pm": False,
-    "mock_pm_df": None,
+    "tokens": load_tokens(), "authenticated": False, "current_token": None,
+    "admin_unlocked": False, "failed_attempts": 0, "lockout_time": 0,
+    "master_admin_password": "admin", "session_id": str(uuid.uuid4()),
+    "scrapfly_key": "", "prepared_catalog": None,
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
@@ -316,52 +281,66 @@ st.sidebar.markdown("## 🌐 Market & Language")
 lang_name = st.sidebar.selectbox("Language", LANGS)
 LANG = LANGS.index(lang_name)
 st.sidebar.title("🛡️ NexusAmz Suite")
-
-# FIX: MOCK TOGGLE — put it prominently at the top
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 🧪 Testing Mode")
-st.session_state.use_mock_pm = st.sidebar.checkbox(
-    "Use MOCK ProductMapper (no credits)",
-    value=st.session_state.use_mock_pm,
-    help="When checked, Step B reads prices from an uploaded CSV/XLSX instead of "
-         "calling the real ProductMapper API. Everything downstream runs for real.",
-)
-if st.session_state.use_mock_pm:
-    st.sidebar.success("MOCK mode is ON — no API calls, no credits used.")
-else:
-    st.sidebar.info("Live mode — real ProductMapper API will be called.")
-
 st.sidebar.markdown("---")
 
-CORE_MODULES = ["auth","calc","gen","val","opt","inv","neg","bid","acos","admin"]
-WHOLESALE_MODULES = ["ws_prepare","ws_catalog","ws_deal","ws_portfolio"]
+# We must use st.session_state to track which tab is active. 
+# When the app first loads, 'active_tab' is not set, so it defaults to 'auth'.
+if "active_tab" not in st.session_state:
+    st.session_state.active_tab = "auth"
 
-st.sidebar.markdown("### Core Features")
-core_choice = st.sidebar.radio(
-    "Core Module",
-    CORE_MODULES,
-    format_func=lambda k: L(k, LANG),
-    key="core_radio",
-)
+def change_tab(new_tab):
+    st.session_state.active_tab = new_tab
 
+# ACCESS & AUTHENTICATION
+st.sidebar.markdown("### 🔐 Access")
+if st.sidebar.button(L("auth", LANG), use_container_width=True):
+    change_tab("auth")
+
+# PL FEATURES
+st.sidebar.markdown("### 🚀 PL Features")
+pl_modules = ["calc", "gen", "val", "opt", "inv"]
+for mod in pl_modules:
+    if st.sidebar.button(L(mod, LANG), use_container_width=True, key=f"btn_{mod}"):
+        change_tab(mod)
+
+# PPC FEATURES
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 📈 PPC Features")
+ppc_modules = ["neg", "bid", "acos"]
+for mod in ppc_modules:
+    if st.sidebar.button(L(mod, LANG), use_container_width=True, key=f"btn_{mod}"):
+        change_tab(mod)
+
+# WHOLESALE FEATURES
 st.sidebar.markdown("---")
 st.sidebar.markdown(f"### {L('ws_heading', LANG)}")
-ws_choice = st.sidebar.radio(
-    "Wholesale Module",
-    WHOLESALE_MODULES,
-    format_func=lambda k: L(k, LANG),
-    key="ws_radio",
-)
+ws_modules = ["ws_prepare", "ws_catalog", "ws_deal", "ws_portfolio"]
+for mod in ws_modules:
+    if st.sidebar.button(L(mod, LANG), use_container_width=True, key=f"btn_{mod}"):
+        change_tab(mod)
 
-use_ws = st.sidebar.checkbox("Switch to Wholesale module", value=False)
-app_mode = ws_choice if use_ws else core_choice
+# ADMIN
+st.sidebar.markdown("---")
+st.sidebar.markdown("### ⚙️ Administration")
+if st.sidebar.button(L("admin", LANG), use_container_width=True):
+    change_tab("admin")
 
+# Footer
+st.sidebar.markdown('<div class="sidebar-footer">Prepared By Ai Engineer : Muhammad Habib</div>', unsafe_allow_html=True)
+
+app_mode = st.session_state.active_tab
+
+# =========================================================================
+# AUTHENTICATION GUARD
+# =========================================================================
 if time.time() < st.session_state.lockout_time:
     st.error(f"🚨 {int(st.session_state.lockout_time - time.time())}s")
     st.stop()
 
-if not st.session_state.authenticated and app_mode not in ("auth","admin") and app_mode not in WHOLESALE_MODULES:
+# Require authentication for all tabs EXCEPT auth and admin
+if not st.session_state.authenticated and app_mode not in ("auth", "admin"):
     st.warning(L("auth_warn", LANG))
+    st.info("Please click the 'Access & Authentication' tab in the sidebar to log in.")
     st.stop()
 
 if st.session_state.authenticated and st.session_state.current_token:
@@ -469,16 +448,12 @@ elif app_mode == "gen":
         feat_lines = [f.strip() for f in feats.split("\n") if f.strip()]
         bullets = []
         for i in range(5):
-            if i < len(feat_lines):
-                b = f"• {feat_lines[i]}"
-            elif i < len(kw_list):
-                b = f"• PREMIUM: {kw_list[i]}"
-            else:
-                b = f"• GUARANTEED by {brand}."
+            if i < len(feat_lines): b = f"• {feat_lines[i]}"
+            elif i < len(kw_list): b = f"• PREMIUM: {kw_list[i]}"
+            else: b = f"• GUARANTEED by {brand}."
             bullets.append(b[:250])
         desc = f"<p><b>{brand} {pname}</b> - {variant}</p><ul>"
-        for f in feat_lines[:4]:
-            desc += f"<li>{f}</li>"
+        for f in feat_lines[:4]: desc += f"<li>{f}</li>"
         desc += "</ul>"
         desc = desc[:2000]
         st.success(L("gen_ok", LANG))
@@ -502,28 +477,19 @@ elif app_mode == "val":
     st.caption(L("val_desc", LANG))
     v_t = st.text_input(L("v_title", LANG), value=L("def_prod", LANG))
     v_b = []
-    defaults = [
-        "High quality ballet doll with transformation tutu.",
-        "Includes bow headband and heart locket necklace.",
-        "7 poseable joints for realistic dance poses.",
-        "Made from child safe non-toxic materials.",
-        "Recommended for children ages 3+.",
-    ]
+    defaults = ["High quality ballet doll with transformation tutu.", "Includes bow headband and heart locket necklace.", "7 poseable joints for realistic dance poses.", "Made from child safe non-toxic materials.", "Recommended for children ages 3+."]
     for i in range(5):
         v_b.append(st.text_input(L("v_bp", LANG).replace("%d", str(i+1)), value=defaults[i]))
     if st.button(L("btn_val", LANG)):
         st.success(L("v_ok", LANG))
         st.markdown(f"### {L('v_report', LANG)}")
         ch = L("chars", LANG)
-        fields = [(L("v_title", LANG), v_t, 75)] + [
-            (L("v_bp", LANG).replace("%d", str(i+1)), v_b[i], 250) for i in range(5)
-        ]
+        fields = [(L("v_title", LANG), v_t, 75)] + [(L("v_bp", LANG).replace("%d", str(i+1)), v_b[i], 250) for i in range(5)]
         for name, text, lim in fields:
             n = len(text)
             status = L("v_pass", LANG) if n <= lim else L("v_warn", LANG)
             st.write(f"**{name}:** {n} {ch} | {status}")
-            if n > lim:
-                st.info(f"{L('v_suggest', LANG)} {text[:lim]}")
+            if n > lim: st.info(f"{L('v_suggest', LANG)} {text[:lim]}")
 
 # =========================================================================
 # MODULE: OPTIMIZER
@@ -537,15 +503,12 @@ elif app_mode == "opt":
         uniq = []
         for w in words:
             wl = w.lower()
-            if wl not in uniq and len(wl) > 1:
-                uniq.append(wl)
+            if wl not in uniq and len(wl) > 1: uniq.append(wl)
         packed = ""
         for w in uniq:
             cand = f"{packed} {w}".strip() if packed else w
-            if len(cand.encode("utf-8")) <= 249:
-                packed = cand
-            else:
-                break
+            if len(cand.encode("utf-8")) <= 249: packed = cand
+            else: break
         b = len(packed.encode("utf-8"))
         c = len(packed)
         st.success(L("opt_ok", LANG))
@@ -587,16 +550,9 @@ elif app_mode == "inv":
 elif app_mode == "neg":
     st.title(L("neg", LANG))
     st.markdown(f"### {L('neg_sample_h', LANG)}")
-    sample = pd.DataFrame({
-        "Customer Search Term": ["cheap ballerina", "free dance toy", "best ballet doll"],
-        "Clicks": [25, 18, 30],
-        "Orders": [0, 0, 5],
-        "Spend": [12.5, 9.0, 15.0],
-    })
+    sample = pd.DataFrame({"Customer Search Term": ["cheap ballerina", "free dance toy", "best ballet doll"], "Clicks": [25, 18, 30], "Orders": [0, 0, 5], "Spend": [12.5, 9.0, 15.0]})
     st.dataframe(sample, use_container_width=True)
-    st.download_button(L("neg_sample_btn", LANG),
-                       data=sample.to_csv(index=False).encode(),
-                       file_name="ppc_sample.csv", mime="text/csv")
+    st.download_button(L("neg_sample_btn", LANG), data=sample.to_csv(index=False).encode(), file_name="ppc_sample.csv", mime="text/csv")
     st.markdown("---")
     up = st.file_uploader(L("neg_upload", LANG), type=SUPPORTED_EXTS)
     c1, c2 = st.columns(2)
@@ -604,8 +560,7 @@ elif app_mode == "neg":
     mo = c2.number_input(L("neg_max", LANG), min_value=0, value=0, step=1)
     if up and st.button(L("btn_neg", LANG)):
         df, err = read_uploaded_file(up)
-        if err:
-            st.error(err)
+        if err: st.error(err)
         else:
             tc = next((c for c in df.columns if "search term" in c.lower() or "keyword" in c.lower()), None)
             cc = next((c for c in df.columns if "click" in c.lower()), None)
@@ -614,11 +569,8 @@ elif app_mode == "neg":
                 bad = df[(df[cc] >= mc) & (df[oc] <= mo)]
                 st.success(L("neg_ok", LANG).format(n=len(bad)))
                 st.dataframe(bad[[tc, cc, oc]], use_container_width=True)
-                st.download_button(L("neg_download", LANG),
-                                   data=bad.to_csv(index=False).encode(),
-                                   file_name="negatives.csv", mime="text/csv")
-            else:
-                st.error(L("neg_err", LANG))
+                st.download_button(L("neg_download", LANG), data=bad.to_csv(index=False).encode(), file_name="negatives.csv", mime="text/csv")
+            else: st.error(L("neg_err", LANG))
 
 # =========================================================================
 # MODULE: BID OPTIMIZER
@@ -633,8 +585,7 @@ elif app_mode == "bid":
     up = st.file_uploader(L("bid_upload", LANG), type=SUPPORTED_EXTS)
     if up:
         df, err = read_uploaded_file(up)
-        if err:
-            st.error(err)
+        if err: st.error(err)
         else:
             st.markdown(f"### {L('bid_preview', LANG)}")
             st.dataframe(df.head(3), use_container_width=True)
@@ -649,17 +600,13 @@ elif app_mode == "bid":
                     def opt(row):
                         cb = row[bc]
                         a = row[acos_col]
-                        if a == 0:
-                            return max(mn, cb * 0.8)
+                        if a == 0: return max(mn, cb * 0.8)
                         return max(mn, min(mx, cb * (tacos / a)))
                     df[new_col] = df.apply(opt, axis=1)
                     st.success(L("bid_ok", LANG))
                     st.dataframe(df[[bc, sc, sl, acos_col, new_col]], use_container_width=True)
-                    st.download_button(L("bid_download", LANG),
-                                       data=df.to_csv(index=False).encode(),
-                                       file_name="bids.csv", mime="text/csv")
-                else:
-                    st.error(L("bid_err", LANG))
+                    st.download_button(L("bid_download", LANG), data=df.to_csv(index=False).encode(), file_name="bids.csv", mime="text/csv")
+                else: st.error(L("bid_err", LANG))
 
 # =========================================================================
 # MODULE: ACOS
@@ -687,10 +634,8 @@ elif app_mode == "acos":
         m3.metric(L("acos_m3", LANG), f"{cur}{org:,.2f}")
         m4.metric(L("acos_m4", LANG), f"{orgr:.1f}%")
         st.markdown(f"### {L('acos_insight', LANG)}")
-        if t <= target:
-            st.info(L("acos_healthy", LANG).format(v=f"{t:.1f}", t=f"{target:.1f}"))
-        else:
-            st.warning(L("acos_warn", LANG).format(v=f"{t:.1f}", t=f"{target:.1f}"))
+        if t <= target: st.info(L("acos_healthy", LANG).format(v=f"{t:.1f}", t=f"{target:.1f}"))
+        else: st.warning(L("acos_warn", LANG).format(v=f"{t:.1f}", t=f"{target:.1f}"))
 
 # =========================================================================
 # MODULE: ADMIN
@@ -704,13 +649,16 @@ elif app_mode == "admin":
             if pwd == st.session_state.master_admin_password:
                 st.session_state.admin_unlocked = True
                 st.rerun()
-            else:
-                st.error(L("admin_bad_pwd", LANG))
+            else: st.error(L("admin_bad_pwd", LANG))
     else:
         st.caption(L("admin_title", LANG))
-        if st.button(L("admin_lock", LANG)):
-            st.session_state.admin_unlocked = False
-            st.rerun()
+        
+        col_lock, _ = st.columns([1, 4])
+        with col_lock:
+            if st.button(L("admin_lock", LANG)):
+                st.session_state.admin_unlocked = False
+                st.rerun()
+                
         st.markdown("---")
         tokens = load_tokens()
         for k, v in list(tokens.items()):
@@ -742,55 +690,28 @@ elif app_mode == "admin":
                 st.success(L("admin_new_ok", LANG).format(t=tid, n=att))
                 st.rerun()
         st.markdown("---")
+        
         st.markdown(f"### {L('admin_pwd_t', LANG)}")
         np = st.text_input(L("admin_new_pwd", LANG), type="password")
         if st.button(L("admin_pwd_btn", LANG)):
             if np:
                 st.session_state.master_admin_password = np
                 st.success(L("admin_pwd_ok", LANG))
-            else:
-                st.error(L("admin_pwd_empty", LANG))
+            else: st.error(L("admin_pwd_empty", LANG))
 
 # =========================================================================
-# WHOLESALE MODULE 0: VENDOR FILE PREPARATION
+# WHOLESALE MODULE 0: VENDOR FILE PREPARATION (SCRAPFLY)
 # =========================================================================
 elif app_mode == "ws_prepare":
     st.title(L("ws_prepare", LANG))
-    st.caption(
-        "Step 1 of 2 — clean the raw vendor file, enrich it with real Amazon "
-        "prices via ProductMapper, and export a prepared CSV. Then go to "
-        "**Supplier Catalog Analyzer** to rank by ROI."
-    )
+    st.caption("Step 1 of 2 — clean the raw vendor file, enrich it with real Amazon prices via Scrapfly, and export a prepared CSV.")
 
-    # FIX: show MOCK banner
-    if st.session_state.use_mock_pm:
-        st.warning(
-            "🧪 **MOCK MODE IS ON.** Step B will NOT call ProductMapper. "
-            "Instead you upload a CSV/XLSX whose columns mimic the ProductMapper output "
-            "(e.g. `Identifier Value`, `Price`, `Offer Count`, `Best Seller Rank (BSR)`, "
-            "`Product Title`). Everything after that runs for real."
-        )
-
-    st.markdown("### 1) ProductMapper API key")
-    if st.session_state.use_mock_pm:
-        st.info("MOCK mode — no API key needed. You can leave this blank.")
-    else:
-        st.info(
-            "Your key is stored only in this browser session. "
-            "Paste a **freshly regenerated** key — never share one publicly."
-        )
-    st.session_state.pm_api_key = st.text_input(
-        "ProductMapper API Key",
-        value=st.session_state.pm_api_key,
-        type="password",
-    )
+    st.markdown("### 1) Scrapfly API key")
+    st.info("Your key is stored only in this browser session. Paste a **freshly regenerated** key from https://scrapfly.io/dashboard")
+    st.session_state.scrapfly_key = st.text_input("Scrapfly API Key", value=st.session_state.scrapfly_key, type="password")
 
     st.markdown("### 2) Upload the raw vendor file")
-    raw_file = st.file_uploader(
-        "Upload Vendor File (CSV, XLSX, XLS)",
-        type=SUPPORTED_EXTS,
-        key="ws_prep_raw",
-    )
+    raw_file = st.file_uploader("Upload Vendor File (CSV, XLSX, XLS)", type=SUPPORTED_EXTS, key="ws_prep_raw")
 
     if raw_file:
         raw_df, err = read_uploaded_file(raw_file)
@@ -798,9 +719,7 @@ elif app_mode == "ws_prepare":
             st.error(err)
             st.stop()
 
-        # ---------- Auto-detect header row (metadata at top) ----------
-        expected_hints = {"gtin","upc","ean","asin","name","title","brand",
-                          "cost","price","moq","quantity","stock","inventory","category"}
+        expected_hints = {"gtin","upc","ean","asin","name","title","brand","cost","price","moq","quantity","stock","inventory","category"}
         header_row = 0
         preview = raw_df.head(15)
         for idx in range(len(preview)):
@@ -812,16 +731,8 @@ elif app_mode == "ws_prepare":
 
         st.markdown("### 3) Cleanup settings")
         c1, c2 = st.columns(2)
-        header_row = c1.number_input(
-            "Header row (0-indexed)",
-            min_value=0, value=int(header_row), step=1,
-            help="Row index that contains the real column names. Metadata rows above will be dropped.",
-        )
-        max_rows = c2.number_input(
-            "Max rows to enrich (credit cap)",
-            min_value=1, value=int(len(raw_df)), step=50,
-            help="ProductMapper charges 1 credit per matched GTIN. Cap this to protect your budget.",
-        )
+        header_row = c1.number_input("Header row (0-indexed)", min_value=0, value=int(header_row), step=1)
+        max_rows = c2.number_input("Max rows to scrape (credit cap)", min_value=1, value=5, step=1, help="Scrapfly charges credits per request. Start with 5 to test.")
 
         if st.button("🧹 Step A — Strip metadata & preview", key="btn_strip"):
             df = raw_df.copy()
@@ -829,26 +740,20 @@ elif app_mode == "ws_prepare":
                 df.columns = df.iloc[header_row].astype(str).str.strip()
                 df = df.iloc[header_row + 1:].reset_index(drop=True)
             df.columns = [str(c).strip() for c in df.columns]
-            st.success(f"✅ Cleaned {len(df)} rows. Columns: {list(df.columns)}")
+            st.success(f"✅ Cleaned {len(df)} rows.")
             st.dataframe(df.head(10), use_container_width=True)
             st.session_state["_prep_df"] = df
 
         if "_prep_df" in st.session_state:
             df = st.session_state["_prep_df"].copy()
-
-            def norm(s):
-                return re.sub(r"[^a-z0-9]", "", str(s).lower())
-
-            gtin_col = next(
-                (c for c in df.columns if any(k in norm(c) for k in ["gtin","upc","ean","barcode"])),
-                None,
-            )
+            def norm(s): return re.sub(r"[^a-z0-9]", "", str(s).lower())
+            
+            gtin_col = next((c for c in df.columns if any(k in norm(c) for k in ["gtin","upc","ean","barcode"])), None)
             if not gtin_col:
                 st.error(f"❌ No GTIN/UPC/EAN column found. Columns: {list(df.columns)}")
                 st.stop()
 
             st.info(f"Identifier column: **{gtin_col}**")
-
             work = df.head(int(max_rows)).copy()
             work["_gtin_clean"] = work[gtin_col].apply(_norm_gtin)
             work = work[work["_gtin_clean"].notna()].copy()
@@ -856,380 +761,228 @@ elif app_mode == "ws_prepare":
 
             st.markdown(f"**Will submit {len(gtins)} GTINs.** First 3: `{gtins[:3]}`")
 
-            # =============================================================
-            # FIX: MOCK vs LIVE branch for Step B
-            # =============================================================
-            if st.session_state.use_mock_pm:
-                st.markdown("---")
-                st.markdown("#### 🧪 Step B — Load MOCK ProductMapper result")
-                st.caption(
-                    "Upload any CSV/XLSX that contains the same columns ProductMapper would return. "
-                    "Recommended columns: `Identifier Value` (EAN/UPC/GTIN), `Price`, "
-                    "`Offer Count`, `Best Seller Rank (BSR)`, `Product Title`. "
-                    "Your existing `Step B.csv` works as-is."
-                )
-                mock_file = st.file_uploader(
-                    "Upload MOCK ProductMapper file (CSV, XLSX, XLS)",
-                    type=SUPPORTED_EXTS,
-                    key="mock_pm_upload",
-                )
-                if mock_file:
-                    mock_df, mock_err = read_uploaded_file(mock_file)
-                    if mock_err:
-                        st.error(mock_err)
-                    else:
-                        st.session_state.mock_pm_df = mock_df
-                        st.success(f"✅ Loaded mock PM file: **{len(mock_df)} rows**, {len(mock_df.columns)} columns.")
-                        st.dataframe(mock_df.head(10), use_container_width=True)
+            if st.button("🌐 Step B — Fetch prices via Scrapfly", key="btn_fetch"):
+                if not st.session_state.scrapfly_key:
+                    st.error("❌ Paste your Scrapfly API key above first.")
+                    st.stop()
+                
+                try:
+                    client = ScrapflyClient(key=st.session_state.scrapfly_key)
+                except Exception as e:
+                    st.error(f"❌ Failed to initialize Scrapfly: {e}")
+                    st.stop()
 
-                if st.session_state.mock_pm_df is not None:
-                    if st.button("✅ Use this as Step B result", key="btn_use_mock"):
-                        st.session_state["_pm_prices"] = st.session_state.mock_pm_df.copy()
-                        st.success(
-                            f"✅ Injected {len(st.session_state.mock_pm_df)} rows as the "
-                            f"ProductMapper result. Now click **Step C** below to merge."
-                        )
-            else:
-                st.markdown("---")
-                st.markdown("#### 🌐 Step B — Fetch prices from ProductMapper")
-                if st.button("🌐 Step B — Fetch prices from ProductMapper", key="btn_fetch"):
-                    if not st.session_state.pm_api_key:
-                        st.error("❌ Paste your ProductMapper API key above first.")
-                        st.stop()
+                results = []
+                progress_bar = st.progress(0.0, text="Starting Scrapfly extraction...")
+                
+                for i, gtin in enumerate(gtins):
+                    progress_bar.progress((i + 1) / len(gtins), text=f"Processing {gtin} ({i+1}/{len(gtins)})...")
+                    
+                    asin = None
+                    price, bsr, offers = None, None, None
+                    
                     try:
-                        from productmapper import ProductMapper
-                    except ImportError:
-                        st.error("❌ `productmapper` package not installed. Run `pip install productmapper`.")
-                        st.stop()
+                        # STEP 1: Find the ASIN by scraping the search page
+                        search_url = f"https://www.amazon.com/s?k={gtin}"
+                        search_resp = client.scrape(ScrapeConfig(
+                            url=search_url, asp=True, country="US", render_js=True
+                        ))
+                        
+                        # Find the first /dp/ link
+                        match = re.search(r'/dp/([A-Z0-9]{10})', search_resp.content)
+                        if match:
+                            asin = match.group(1)
+                        
+                        if not asin:
+                            results.append({"GTIN": gtin, "Price": None, "BSR": None, "Offers": None, "Status": "No ASIN found in search"})
+                            time.sleep(2)
+                            continue
+                            
+                        # STEP 2: Scrape the actual product page using the ASIN
+                        product_url = f"https://www.amazon.com/dp/{asin}"
+                        prod_resp = client.scrape(ScrapeConfig(
+                            url=product_url, 
+                            asp=True, 
+                            country="US", 
+                            render_js=True,
+                            extraction_model="product"
+                        ))
+                        
+                        extracted_data = prod_resp.extraction_result
+                        
+                        if not extracted_data:
+                             results.append({"GTIN": gtin, "Price": None, "BSR": None, "Offers": None, "Status": "Extraction returned empty"})
+                             continue
 
-                    try:
-                        client = ProductMapper(api_key=st.session_state.pm_api_key)
-                        job = client.lookup_many(gtins)
-                        progress = st.progress(0.0, text="Submitting batch…")
-                        done = client.wait_for_batch(
-                            job.id,
-                            on_progress=lambda j: progress.progress(
-                                min(1.0, j.processed_items / max(1, j.total_items)),
-                                text=f"{j.processed_items}/{j.total_items}",
-                            ),
-                        )
-                        csv_text = client.get_batch_csv(job.id)
-                        import io as _io
-                        prices_df = pd.read_csv(_io.StringIO(csv_text))
-                        st.session_state["_pm_prices"] = prices_df
-                        st.success(f"✅ Fetched {len(prices_df)} result rows.")
+                        product = extracted_data[0] if isinstance(extracted_data, list) else extracted_data
+
+                        # Extract Price
+                        if product.get("offers"):
+                            for offer in product["offers"]:
+                                if offer.get("price"):
+                                    price = str(offer["price"])
+                                    break
+                        
+                        # Extract BSR
+                        if product.get("info_table"):
+                            bsr_text = product["info_table"].get("Best Sellers Rank", "")
+                            match_bsr = re.search(r"#([\d,]+)", bsr_text)
+                            if match_bsr:
+                                bsr = match_bsr.group(1).replace(",", "")
+                        
+                        # Extract Offer Count
+                        if product.get("offers"):
+                            offers = str(len(product["offers"]))
+                        
+                        results.append({
+                            "GTIN": gtin, "Price": price, "BSR": bsr, "Offers": offers, 
+                            "Status": "Success" if price else "No price found on product page"
+                        })
+                        
                     except Exception as e:
-                        st.error(f"❌ ProductMapper call failed: {e}")
+                        results.append({"GTIN": gtin, "Price": None, "BSR": None, "Offers": None, "Status": f"Error: {str(e)[:80]}"})
+                    
+                    time.sleep(3)
+
+                prices_df = pd.DataFrame(results)
+                st.session_state["_pm_prices"] = prices_df
+                st.success(f"✅ Scrapfly extraction complete.")
 
         if "_pm_prices" in st.session_state:
             prices_df = st.session_state["_pm_prices"].copy()
-
-            st.markdown("### 4) Clean the ProductMapper result")
-            st.markdown(f"Raw result rows: **{len(prices_df)}**")
-
-            before = len(prices_df)
-            prices_df = prices_df.dropna(how="all").copy()
-            after_blank = len(prices_df)
-
-            id_col = next(
-                (c for c in prices_df.columns if any(k in str(c).lower() for k in ["gtin","upc","ean","identifier","barcode"])),
-                None,
-            )
-            price_col = next(
-                (c for c in prices_df.columns if "price" in str(c).lower() and "lowest" not in str(c).lower()),
-                None,
-            )
-            if not price_col:
-                price_col = next(
-                    (c for c in prices_df.columns if str(c).strip().lower() == "price"),
-                    None,
-                )
-            title_col_pm = next(
-                (c for c in prices_df.columns if any(k in str(c).lower() for k in ["title","name"])),
-                None,
-            )
-            offers_col = next(
-                (c for c in prices_df.columns if "offer" in str(c).lower()),
-                None,
-            )
-            bsr_col = next(
-                (c for c in prices_df.columns if "bsr" in str(c).lower() or "rank" in str(c).lower() or "sales" in str(c).lower()),
-                None,
-            )
-            cat_col_pm = next(
-                (c for c in prices_df.columns if "categor" in str(c).lower()),
-                None,
-            )
-
-            st.write(
-                f"Detected — **identifier:** `{id_col}`, **price:** `{price_col}`, "
-                f"**offers:** `{offers_col or '—'}`, **BSR/rank:** `{bsr_col or '—'}`, "
-                f"**category:** `{cat_col_pm or '—'}`"
-            )
-
-            if id_col:
-                prices_df[id_col] = prices_df[id_col].astype(str).str.strip()
-                prices_df = prices_df[
-                    prices_df[id_col].notna()
-                    & (prices_df[id_col] != "")
-                    & (prices_df[id_col] != "nan")
-                ]
-            if price_col:
-                prices_df[price_col] = pd.to_numeric(
-                    prices_df[price_col].astype(str).str.replace(r"[^\d\.\-]", "", regex=True),
-                    errors="coerce",
-                )
-                prices_df = prices_df[prices_df[price_col].notna() & (prices_df[price_col] > 0)]
-
-            after_match = len(prices_df)
-            dropped_blank = before - after_blank
-            dropped_unmatched = after_blank - after_match
-
-            st.markdown(
-                f"- Blank rows removed: **{dropped_blank}**\n"
-                f"- Unmatched / no-price rows removed: **{dropped_unmatched}**\n"
-                f"- Usable matches: **{after_match}**"
-            )
-
-            if after_match == 0:
-                st.error("❌ No usable matches. Check API key, GTIN format, or marketplace.")
-                st.stop()
-
-            st.dataframe(prices_df.head(20), use_container_width=True)
+            st.markdown("### 4) Scraped Data Preview")
+            st.dataframe(prices_df, use_container_width=True)
 
             st.markdown("### 5) Merge price data back into the vendor catalog")
             if st.button("🔗 Step C — Build prepared catalog", key="btn_merge"):
                 vendor = st.session_state["_prep_df"].copy()
                 vendor["_gtin_clean"] = vendor[gtin_col].apply(_norm_gtin)
-
+                
                 pm = prices_df.copy()
-                pm["_gtin_clean"] = pm[id_col].apply(_norm_gtin)
+                pm["_gtin_clean"] = pm["GTIN"].apply(_norm_gtin)
 
-                rename_pm = {"_gtin_clean": "_gtin_clean"}
-                if price_col:
-                    rename_pm[price_col] = "AmazonBuyBoxPrice"
-                if offers_col:
-                    rename_pm[offers_col] = "AmazonNumberOfOffers"
-                if bsr_col:
-                    rename_pm[bsr_col] = "AmazonBSR"
-                if title_col_pm:
-                    rename_pm[title_col_pm] = "AmazonTitle"
-                if cat_col_pm:
-                    rename_pm[cat_col_pm] = "AmazonCategory"
-
-                pm_slim = pm[list(rename_pm.keys())].rename(columns=rename_pm)
+                rename_pm = {"_gtin_clean": "_gtin_clean", "Price": "AmazonBuyBoxPrice", "Offers": "AmazonNumberOfOffers", "BSR": "AmazonBSR"}
+                pm_cols = [c for c in rename_pm.keys() if c in pm.columns]
+                pm_slim = pm[pm_cols].rename(columns=rename_pm)
 
                 merged = vendor.merge(pm_slim, on="_gtin_clean", how="inner")
 
-                st.info(
-                    f"Vendor rows: **{len(vendor)}** | PM rows: **{len(pm_slim)}** | "
-                    f"Matched: **{len(merged)}**"
-                )
+                st.info(f"Vendor rows: **{len(vendor)}** | Scraped rows: **{len(pm_slim)}** | Matched: **{len(merged)}**")
                 if len(merged) == 0:
-                    st.error("❌ 0 matches. GTIN formats differ between vendor and ProductMapper.")
-                    st.write("Vendor GTIN sample:", vendor["_gtin_clean"].dropna().head(5).tolist())
-                    st.write("PM GTIN sample:", pm["_gtin_clean"].dropna().head(5).tolist())
+                    st.error("❌ 0 matches. Check the GTIN formats.")
                     st.stop()
 
                 st.session_state["prepared_catalog"] = merged
-                st.success(
-                    f"✅ Prepared catalog built: **{len(merged)}** SKUs "
-                    f"(matched on {gtin_col}, Amazon price available)"
-                )
+                st.success(f"✅ Prepared catalog built: **{len(merged)}** SKUs")
                 st.dataframe(merged.head(20), use_container_width=True)
-
-                st.download_button(
-                    "📥 Download prepared_catalog.csv (feed into Supplier Catalog Analyzer)",
-                    data=merged.to_csv(index=False).encode(),
-                    file_name="prepared_catalog.csv",
-                    mime="text/csv",
-                )
-
-                st.info(
-                    "Next: switch to **Supplier Catalog Analyzer** and upload "
-                    "`prepared_catalog.csv` — it will use the real `AmazonBuyBoxPrice` "
-                    "column instead of the flat $29.99 assumption."
-                )
+                st.download_button("📥 Download prepared_catalog.csv", data=merged.to_csv(index=False).encode(), file_name="prepared_catalog.csv", mime="text/csv")
 
 # =========================================================================
 # WHOLESALE MODULE 1: SUPPLIER CATALOG ANALYZER
 # =========================================================================
 elif app_mode == "ws_catalog":
     st.title(L("ws_catalog", LANG))
-    st.caption(
-        "Step 2 of 2 — upload the **prepared_catalog.csv** from the previous tab. "
-        "The app uses the real Amazon Buy Box price, auto-selects referral % by category, "
-        "applies your FBA fee estimate, and ranks the **top 100 most profitable** SKUs "
-        "by ROI × profit."
-    )
+    st.caption("Step 2 of 2 — upload the **prepared_catalog.csv** from the previous tab to rank by ROI.")
 
     def get_referral_rate(category_str, sell_price):
-        if not isinstance(category_str, str):
-            return 15.0
+        if not isinstance(category_str, str): return 15.0
         c = category_str.lower()
-        if any(k in c for k in ["beauty", "health", "personal care", "dermacosmetics",
-                                 "sun protection", "face cream", "body lotion", "shower",
-                                 "deodorant", "shampoo", "hand cream", "micellar"]):
+        if any(k in c for k in ["beauty", "health", "personal care", "dermacosmetics", "sun protection", "face cream", "body lotion", "shower", "deodorant", "shampoo", "hand cream", "micellar"]):
             return 8.0 if sell_price <= 10.0 else 15.0
-        if any(k in c for k in ["electronic", "computer", "camera", "phone"]):
-            return 8.0
+        if any(k in c for k in ["electronic", "computer", "camera", "phone"]): return 8.0
         if any(k in c for k in ["clothing", "apparel", "fashion"]):
-            if sell_price <= 15.0:
-                return 5.0
-            elif sell_price <= 20.0:
-                return 10.0
-            else:
-                return 17.0
-        if "device accessory" in c:
-            return 45.0
+            if sell_price <= 15.0: return 5.0
+            elif sell_price <= 20.0: return 10.0
+            else: return 17.0
+        if "device accessory" in c: return 45.0
         return 15.0
 
     col1, col2, col3, col4 = st.columns(4)
     target_roi = col1.number_input("Minimum ROI (%)", min_value=0.0, value=30.0, step=5.0)
     min_profit = col2.number_input("Minimum Profit per Unit ($)", min_value=0.0, value=3.0, step=0.5)
-    default_fba = col3.number_input(
-        "Estimated FBA Fee ($) — used if no fba_fee column",
-        min_value=0.0, value=5.40, step=0.50,
-    )
-    max_offers = col4.number_input(
-        "Max Amazon sellers (competition cap)",
-        min_value=1, value=25, step=1,
-        help="Rows with more offers than this will be flagged but not shortlisted.",
-    )
-
-    st.markdown("**Expected columns:** `GTIN`, `$ Lowest Price inc. shipping` (cost), `AmazonBuyBoxPrice` (real price), "
-                "`AmazonNumberOfOffers` (optional), `Category`, `FBA_Fee` (optional)")
+    default_fba = col3.number_input("Estimated FBA Fee ($)", min_value=0.0, value=5.40, step=0.50)
+    max_offers = col4.number_input("Max Amazon sellers", min_value=1, value=25, step=1)
 
     catalog_file = st.file_uploader("Upload Prepared Catalog", type=SUPPORTED_EXTS, key="ws_cat_upload")
     if catalog_file:
         cat_df, err = read_uploaded_file(catalog_file)
-        if err:
-            st.error(err)
+        if err: st.error(err)
         else:
             cat_df.columns = [str(c).strip().lower() for c in cat_df.columns]
-
             def find_col(*patterns, exclude=()):
-                def norm(s):
-                    return re.sub(r"[^a-z0-9]", "", str(s).lower())
+                def norm(s): return re.sub(r"[^a-z0-9]", "", str(s).lower())
                 for c in cat_df.columns:
-                    if any(ex in c for ex in exclude):
-                        continue
+                    if any(ex in c for ex in exclude): continue
                     nc = norm(c)
-                    if any(norm(p) in nc for p in patterns):
-                        return c
+                    if any(norm(p) in nc for p in patterns): return c
                 return None
 
             asin_col = find_col("asin")
             upc_col = find_col("gtin", "upc", "ean", "isbn", "barcode", "identifier")
-            cost_col = find_col("lowestprice", "unitcost", "cost", "price",
-                                exclude=("sell","retail","current","amazon"))
+            cost_col = find_col("lowestprice", "unitcost", "cost", "price", exclude=("sell","retail","current","amazon"))
             moq_col = find_col("moq", "minimumorder", "minorder", "unitspercase", "packsize")
-            if not moq_col:
-                moq_col = find_col("unit", exclude=("unitcost","unitprice","profit"))
-            qty_col = find_col("totalinventory", "quantity", "available", "stock",
-                               "inventory", "lowestpricedofferinventory")
+            if not moq_col: moq_col = find_col("unit", exclude=("unitcost","unitprice","profit"))
+            qty_col = find_col("totalinventory", "quantity", "available", "stock", "inventory", "lowestpricedofferinventory")
             title_col = find_col("name", "title", "description", "productname")
-            sell_col = find_col(
-                "amazonbuyboxprice", "buyboxprice", "buybox", "sellprice",
-                "sellingprice", "marketprice", "retail",
-                exclude=("lowest", "cost", "unit"),
-            )
+            sell_col = find_col("amazonbuyboxprice", "buyboxprice", "buybox", "sellprice", "sellingprice", "marketprice", "retail", exclude=("lowest", "cost", "unit"))
             fba_col = find_col("fbafee", "fba_fee", "fulfillmentfee")
             cat_col = find_col("category", "product category", "producttype")
             offers_col = find_col("amazonnumberofoffers", "numberofoffers", "offers", "sellers")
             bsr_col = find_col("amazonbsr", "bsr", "rank")
 
             if not cost_col:
-                st.error(
-                    "❌ No cost/price column found. Expected `$ Lowest Price inc. shipping` "
-                    "or `cost`. "
-                    f"Detected: `{', '.join(cat_df.columns[:8])}...`"
-                )
+                st.error("❌ No cost/price column found. Expected `$ Lowest Price inc. shipping`.")
             elif not (upc_col or asin_col):
-                st.error(
-                    "❌ No identifier column found. Include `GTIN`, `UPC`, `EAN`, or `ASIN`. "
-                    f"Detected: `{', '.join(cat_df.columns[:8])}...`"
-                )
+                st.error("❌ No identifier column found. Include `GTIN`, `UPC`, `EAN`, or `ASIN`.")
             else:
                 def to_num(series):
-                    if series is None:
-                        return None
-                    return pd.to_numeric(
-                        series.astype(str)
-                              .str.replace(r"[^\d\.\-]", "", regex=True)
-                              .replace("", "0"),
-                        errors="coerce"
-                    ).fillna(0)
+                    if series is None: return None
+                    return pd.to_numeric(series.astype(str).str.replace(r"[^\d\.\-]", "", regex=True).replace("", "0"), errors="coerce").fillna(0)
 
                 cost_vals = to_num(cat_df[cost_col])
-
                 st.markdown("---")
-                if sell_col:
-                    st.success(f"✅ Using real Amazon Buy Box price from `{sell_col}` column.")
-                else:
-                    st.warning(
-                        "⚠️ No `AmazonBuyBoxPrice` column — falling back to flat default price. "
-                        "Run the Vendor File Preparation tab first for real prices."
-                    )
+                if sell_col: st.success(f"✅ Using real Amazon price from `{sell_col}` column.")
+                else: st.warning("⚠️ No `AmazonBuyBoxPrice` column — falling back to flat default price.")
+                
                 default_sell = st.number_input("Fallback Selling Price ($)", min_value=1.0, value=29.99, step=1.0)
 
                 df = cat_df.copy()
                 df["_sell"] = to_num(df[sell_col]) if sell_col else default_sell
                 if sell_col and (df["_sell"].fillna(0) <= 0).all():
-                    st.warning(
-                        f"⚠️ `{sell_col}` is present but empty — falling back to default ${default_sell:.2f}."
-                    )
+                    st.warning(f"⚠️ `{sell_col}` is present but empty — falling back to ${default_sell:.2f}.")
                     df["_sell"] = default_sell
+                
                 df["_cost"] = cost_vals
 
-                if cat_col:
-                    df["_referral_pct"] = df.apply(
-                        lambda r: get_referral_rate(r.get(cat_col, ""), r["_sell"]), axis=1
-                    )
-                else:
-                    df["_referral_pct"] = 15.0
+                if cat_col: df["_referral_pct"] = df.apply(lambda r: get_referral_rate(r.get(cat_col, ""), r["_sell"]), axis=1)
+                else: df["_referral_pct"] = 15.0
 
                 df["_referral"] = df["_sell"] * (df["_referral_pct"] / 100.0)
 
-                if fba_col:
-                    df["_fba_fee"] = to_num(df[fba_col])
-                else:
-                    df["_fba_fee"] = default_fba
+                if fba_col: df["_fba_fee"] = to_num(df[fba_col])
+                else: df["_fba_fee"] = default_fba
 
                 df["_total_fees"] = df["_referral"] + df["_fba_fee"]
                 df["_profit"] = df["_sell"] - df["_cost"] - df["_total_fees"]
                 df["_margin"] = (df["_profit"] / df["_sell"] * 100).round(1).replace([float("inf"), float("-inf")], 0)
                 df["_roi"] = (df["_profit"] / df["_cost"] * 100).round(1).replace([float("inf"), float("-inf")], 0)
 
-                if offers_col:
-                    df["_offers"] = to_num(df[offers_col])
-                else:
-                    df["_offers"] = 0
-
-                if bsr_col:
-                    df["_bsr"] = to_num(df[bsr_col])
-                else:
-                    df["_bsr"] = 0
+                if offers_col: df["_offers"] = to_num(df[offers_col])
+                else: df["_offers"] = 0
 
                 df = df[df["_cost"] > 0].copy()
-
                 df["_pass_roi"] = df["_roi"] >= target_roi
                 df["_pass_profit"] = df["_profit"] >= min_profit
                 df["_pass_offers"] = df["_offers"] <= max_offers
                 df["_pass"] = df["_pass_roi"] & df["_pass_profit"] & df["_pass_offers"]
 
                 passed = df[df["_pass"]].copy()
-
                 passed["_score"] = passed["_roi"] * passed["_profit"]
                 top100 = passed.sort_values("_score", ascending=False).head(100).copy()
-
                 failed = df[~df["_pass"]].copy()
 
                 st.markdown("---")
-                st.success(
-                    f"✅ {len(passed)} of {len(df)} SKUs pass your filters. "
-                    f"Showing the **top 100 by ROI × Profit**."
-                )
+                st.success(f"✅ {len(passed)} of {len(df)} SKUs pass your filters. Showing the **top 100 by ROI × Profit**.")
 
                 with st.expander("🔍 Detected column mapping & fee logic"):
                     st.write(f"- **Identifier:** `{asin_col or upc_col}`")
@@ -1251,52 +1004,33 @@ elif app_mode == "ws_catalog":
                     id_col = asin_col or upc_col
                     display_cols = [c for c in [id_col, title_col, cat_col, cost_col, moq_col, qty_col] if c and c in top100.columns]
                     display_cols += ["_sell", "_referral_pct", "_fba_fee", "_offers", "_profit", "_margin", "_roi", "_score"]
-                    rename_map = {
-                        "_sell": "Sell Price", "_referral_pct": "Referral %",
-                        "_fba_fee": "FBA Fee", "_offers": "Offers",
-                        "_profit": "Profit", "_margin": "Margin %",
-                        "_roi": "ROI %", "_score": "Score (ROI×Profit)",
-                    }
-                    st.dataframe(
-                        top100[display_cols].rename(columns=rename_map),
-                        use_container_width=True,
-                    )
-                    st.download_button(
-                        "📥 Download Top 100 CSV",
-                        data=top100.to_csv(index=False).encode(),
-                        file_name="wholesale_top100.csv",
-                        mime="text/csv",
-                    )
+                    rename_map = {"_sell": "Sell Price", "_referral_pct": "Referral %", "_fba_fee": "FBA Fee", "_offers": "Offers", "_profit": "Profit", "_margin": "Margin %", "_roi": "ROI %", "_score": "Score"}
+                    st.dataframe(top100[display_cols].rename(columns=rename_map), use_container_width=True)
+                    st.download_button("📥 Download Top 100 CSV", data=top100.to_csv(index=False).encode(), file_name="wholesale_top100.csv", mime="text/csv")
 
                 with st.expander("View rejected rows"):
                     if len(failed):
                         id_col = asin_col or upc_col
-                        cols_show = [c for c in [id_col, cost_col, "_offers", "_referral_pct", "_profit", "_roi",
-                                                  "_pass_roi", "_pass_profit", "_pass_offers"] if c and c in failed.columns]
+                        cols_show = [c for c in [id_col, cost_col, "_offers", "_referral_pct", "_profit", "_roi", "_pass_roi", "_pass_profit", "_pass_offers"] if c and c in failed.columns]
                         st.dataframe(failed[cols_show].head(500), use_container_width=True)
-                    else:
-                        st.write("No rejected rows.")
+                    else: st.write("No rejected rows.")
 
 # =========================================================================
 # WHOLESALE MODULE 2: DEAL VERIFIER
 # =========================================================================
 elif app_mode == "ws_deal":
     st.title(L("ws_deal", LANG))
-    st.caption(
-        "Enter one product's details and get an instant buy/pass verdict with ROI, "
-        "profit, break-even price, and max buy price for your target ROI."
-    )
+    st.caption("Enter one product's details and get an instant buy/pass verdict.")
     col1, col2 = st.columns(2)
     with col1:
-        deal_asin = st.text_input("ASIN (optional, for reference)", placeholder="B08XXXXXXX")
         deal_cost = st.number_input("Supplier Unit Cost ($)", min_value=0.01, value=12.50, step=0.50)
         deal_sell = st.number_input("Amazon Selling Price ($)", min_value=0.01, value=29.99, step=0.50)
     with col2:
-        deal_referral = st.number_input("Referral Fee (%)", min_value=0.0, max_value=100.0, value=15.0, step=0.5, key="deal_ref")
-        deal_fba = st.number_input("FBA Fee ($)", min_value=0.0, value=5.40, step=0.50, key="deal_fba")
-        deal_target_roi = st.number_input("Target ROI (%)", min_value=0.0, value=30.0, step=5.0, key="deal_roi")
+        deal_referral = st.number_input("Referral Fee (%)", min_value=0.0, max_value=100.0, value=15.0, step=0.5)
+        deal_fba = st.number_input("FBA Fee ($)", min_value=0.0, value=5.40, step=0.50)
+        deal_target_roi = st.number_input("Target ROI (%)", min_value=0.0, value=30.0, step=5.0)
 
-    if st.button("🎯 Verify Deal", key="btn_verify_deal"):
+    if st.button("🎯 Verify Deal"):
         ref_fee = deal_sell * (deal_referral / 100.0)
         total_fees = ref_fee + deal_fba
         profit = deal_sell - deal_cost - total_fees
@@ -1306,12 +1040,9 @@ elif app_mode == "ws_deal":
         max_buy = (deal_sell - total_fees) / (1 + deal_target_roi / 100.0) if (1 + deal_target_roi / 100.0) > 0 else 0
 
         st.markdown("---")
-        if roi >= deal_target_roi and profit > 0:
-            st.success(f"✅ **BUY** — ROI {roi:.1f}% meets your {deal_target_roi:.0f}% target.")
-        elif profit > 0:
-            st.warning(f"⚠️ **NEGOTIATE** — Profitable (${profit:.2f}) but ROI {roi:.1f}% is below {deal_target_roi:.0f}% target.")
-        else:
-            st.error(f"❌ **PASS** — Unprofitable at this cost (loss of ${abs(profit):.2f}).")
+        if roi >= deal_target_roi and profit > 0: st.success(f"✅ **BUY** — ROI {roi:.1f}% meets your target.")
+        elif profit > 0: st.warning(f"⚠️ **NEGOTIATE** — Profitable (${profit:.2f}) but ROI is low.")
+        else: st.error(f"❌ **PASS** — Unprofitable at this cost.")
 
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Net Profit", f"${profit:.2f}")
@@ -1319,46 +1050,25 @@ elif app_mode == "ws_deal":
         m3.metric("Margin", f"{margin:.1f}%")
         m4.metric("Total Fees", f"${total_fees:.2f}")
 
-        st.markdown("### Pricing Guidance")
         g1, g2 = st.columns(2)
         g1.metric("Break-Even Sell Price", f"${breakeven_sell:.2f}")
         g2.metric(f"Max Buy @ {deal_target_roi:.0f}% ROI", f"${max_buy:.2f}")
-
-        st.info(
-            f"To hit **{deal_target_roi:.0f}% ROI**, your supplier cost must be **≤ ${max_buy:.2f}**. "
-            f"You are currently at **${deal_cost:.2f}** — "
-            + ("inside the target." if deal_cost <= max_buy else f"**${deal_cost - max_buy:.2f} over**.")
-        )
-
-        st.markdown("---")
-        st.markdown("### Pre-Buy Checklist (manual verification)")
-        st.checkbox("Not gated / no approval required")
-        st.checkbox("Fewer than 3–4 FBA sellers on listing")
-        st.checkbox("ROI holds at 10–15% price drop")
-        st.checkbox("No oversized/heavy FBA fee surprise")
-        st.checkbox("No obvious IP/trademark risk")
 
 # =========================================================================
 # WHOLESALE MODULE 3: PORTFOLIO TRACKER
 # =========================================================================
 elif app_mode == "ws_portfolio":
     st.title(L("ws_portfolio", LANG))
-    st.caption(
-        "Upload your purchase history (CSV, XLSX, or XLS). The app ranks SKUs by ROI, "
-        "flags aging inventory, and shows total capital tied up in underperformers."
-    )
-    st.markdown("**Required columns:** `ASIN`, `Units`, `UnitCost`, `PurchaseDate` (YYYY-MM-DD)")
-    st.markdown("Optional: `CurrentPrice`, `CurrentStock`, `SKU`")
-
+    st.caption("Upload your purchase history to rank SKUs by ROI and flag aging inventory.")
+    st.markdown("**Required columns:** `ASIN`, `Units`, `UnitCost`, `PurchaseDate`")
+    
     port_file = st.file_uploader("Upload Purchase History File", type=SUPPORTED_EXTS, key="ws_port_file")
     if port_file:
         p_df, err = read_uploaded_file(port_file)
-        if err:
-            st.error(err)
+        if err: st.error(err)
         else:
             p_df.columns = [c.strip().lower().replace(" ", "_") for c in p_df.columns]
-
-            asin_c = next((c for c in p_df.columns if c == "asin" or c == "sku"), None)
+            asin_c = next((c for c in p_df.columns if c in ("asin", "sku")), None)
             units_c = next((c for c in p_df.columns if "unit" in c and "cost" not in c), None)
             cost_c = next((c for c in p_df.columns if "cost" in c), None)
             date_c = next((c for c in p_df.columns if "date" in c or "purchase" in c), None)
@@ -1376,24 +1086,20 @@ elif app_mode == "ws_portfolio":
                     p_df["_age_days"] = 0
 
                 grouped = p_df.groupby(asin_c).agg(
-                    TotalUnits=(units_c, "sum"),
-                    TotalCost=("_total_cost", "sum"),
-                    AvgUnitCost=(cost_c, "mean"),
-                    OldestAge=("_age_days", "max"),
-                    Purchases=(units_c, "count"),
+                    TotalUnits=(units_c, "sum"), TotalCost=("_total_cost", "sum"),
+                    AvgUnitCost=(cost_c, "mean"), OldestAge=("_age_days", "max"),
+                    Purchases=(units_c, "count")
                 ).reset_index()
 
                 if price_c:
                     price_map = p_df.groupby(asin_c)[price_c].last()
                     grouped["CurrentPrice"] = grouped[asin_c].map(price_map)
-                else:
-                    grouped["CurrentPrice"] = 29.99
+                else: grouped["CurrentPrice"] = 29.99
 
                 if stock_c:
                     stock_map = p_df.groupby(asin_c)[stock_c].last()
                     grouped["CurrentStock"] = grouped[asin_c].map(stock_map)
-                else:
-                    grouped["CurrentStock"] = grouped["TotalUnits"]
+                else: grouped["CurrentStock"] = grouped["TotalUnits"]
 
                 grouped["EstProfitPerUnit"] = grouped["CurrentPrice"] - grouped["AvgUnitCost"] - (grouped["CurrentPrice"] * 0.15) - 5.40
                 grouped["EstROI"] = (grouped["EstProfitPerUnit"] / grouped["AvgUnitCost"] * 100).round(1)
@@ -1409,32 +1115,18 @@ elif app_mode == "ws_portfolio":
                 m4.metric("Aging SKUs (>90d)", int(grouped["Aging"].sum()))
 
                 st.markdown("### SKU Performance Ranking (by ROI)")
-                rank_cols = [asin_c, "TotalUnits", "AvgUnitCost", "CurrentPrice",
-                             "EstProfitPerUnit", "EstROI", "CapitalTied", "OldestAge", "Aging"]
+                rank_cols = [asin_c, "TotalUnits", "AvgUnitCost", "CurrentPrice", "EstProfitPerUnit", "EstROI", "CapitalTied", "OldestAge", "Aging"]
                 st.dataframe(
                     grouped[rank_cols].sort_values("EstROI", ascending=False).rename(columns={
-                        "AvgUnitCost": "Avg Cost", "CurrentPrice": "Sell",
-                        "EstProfitPerUnit": "Profit/Unit", "EstROI": "ROI %",
-                        "CapitalTied": "Capital Tied", "OldestAge": "Age (days)",
-                    }),
-                    use_container_width=True,
+                        "AvgUnitCost": "Avg Cost", "CurrentPrice": "Sell", "EstProfitPerUnit": "Profit/Unit", "EstROI": "ROI %", "CapitalTied": "Capital Tied", "OldestAge": "Age (days)"
+                    }), use_container_width=True
                 )
 
                 st.markdown("### 🚨 Action List")
                 under = grouped[grouped["Underperforming"]]
                 aging = grouped[grouped["Aging"]]
-                if len(under):
-                    st.warning(f"**{len(under)} underperforming SKUs** (ROI < 20%): consider repricing or liquidation.")
-                    st.dataframe(under[[asin_c, "EstROI", "CapitalTied"]].rename(columns={"EstROI": "ROI %", "CapitalTied": "Capital"}), use_container_width=True)
-                if len(aging):
-                    st.error(f"**{len(aging)} SKUs older than 90 days**: review for storage fee exposure or markdown.")
-                    st.dataframe(aging[[asin_c, "OldestAge", "CapitalTied"]].rename(columns={"OldestAge": "Age (days)", "CapitalTied": "Capital"}), use_container_width=True)
-                if not len(under) and not len(aging):
-                    st.success("✅ No underperformers or aging stock flagged.")
+                if len(under): st.warning(f"**{len(under)} underperforming SKUs** (ROI < 20%).")
+                if len(aging): st.error(f"**{len(aging)} SKUs older than 90 days**.")
+                if not len(under) and not len(aging): st.success("✅ No underperformers or aging stock flagged.")
 
-                st.download_button(
-                    "📥 Download Portfolio Report CSV",
-                    data=grouped.to_csv(index=False).encode(),
-                    file_name="wholesale_portfolio.csv",
-                    mime="text/csv",
-                )
+                st.download_button("📥 Download Portfolio Report CSV", data=grouped.to_csv(index=False).encode(), file_name="wholesale_portfolio.csv", mime="text/csv")
